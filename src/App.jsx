@@ -8,14 +8,15 @@ import SettingsPage from './pages/SettingsPage'
 function App() {
   return (
     <Routes>
-      <Route path="/" element={<AppLayout />}>
-        <Route index element={<Navigate to="/dashboard" replace />} />
+      <Route path="/app" element={<AppLayout />}>
+        <Route index element={<Navigate to="dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="boards" element={<BoardsPage />} />
         <Route path="automations" element={<AutomationsPage />} />
         <Route path="settings" element={<SettingsPage />} />
       </Route>
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+
+      <Route path="*" element={<Navigate to="/app/dashboard" replace />} />
     </Routes>
   )
 }
