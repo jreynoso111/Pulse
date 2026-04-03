@@ -1,4 +1,5 @@
 import { usePulseWorkspace } from '../context/PulseWorkspaceContext'
+import { Navigate } from 'react-router-dom'
 
 function formatDateTime(value) {
   if (!value) return 'Not scheduled'
@@ -6,7 +7,11 @@ function formatDateTime(value) {
 }
 
 function AutomationsPage() {
-  const { automations, toggleAutomation } = usePulseWorkspace()
+  const { automations, currentUser, toggleAutomation } = usePulseWorkspace()
+
+  if (currentUser?.role !== 'admin') {
+    return <Navigate to="/app/dashboard" replace />
+  }
 
   return (
     <section className="space-y-4">

@@ -14,9 +14,28 @@ const SettingsPage = lazy(() => import('./pages/SettingsPage'))
 
 function PageFallback() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50 px-6 text-slate-500">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 text-center shadow-soft">
-        <p className="text-sm font-medium">Loading workspace...</p>
+    <div
+      className="flex min-h-screen items-center justify-center px-6 text-slate-600"
+      style={{
+        background:
+          'radial-gradient(circle at top, color-mix(in srgb, var(--pulse-accent) 14%, transparent), transparent 34%), var(--app-bg)',
+      }}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border p-6 text-center shadow-soft"
+        style={{
+          borderColor: 'color-mix(in srgb, var(--pulse-accent) 24%, white)',
+          backgroundColor: 'var(--surface-elevated)',
+        }}
+      >
+        <div
+          className="mx-auto mb-4 h-10 w-10 animate-pulse rounded-full"
+          style={{
+            background:
+              'linear-gradient(135deg, var(--pulse-accent) 0%, color-mix(in srgb, var(--pulse-accent) 42%, white) 100%)',
+          }}
+        />
+        <p className="text-sm font-medium text-slate-700">Loading workspace...</p>
       </div>
     </div>
   )
@@ -39,6 +58,7 @@ function App() {
   const { authReady, currentUser, isAuthenticated, settings, workspaceError, workspaceLoading } = usePulseWorkspace()
   const homePage = settings.homePage || 'dashboard'
   const mustChangePassword = currentUser?.mustChangePassword === true
+  const canAccessAutomations = currentUser?.role === 'admin'
 
   if (!authReady || (isAuthenticated && workspaceLoading)) {
     return <PageFallback />
@@ -67,7 +87,10 @@ function App() {
           <Route path="dashboard/:metricKey" element={<DashboardDetailPage />} />
           <Route path="boards" element={<BoardsPage />} />
           <Route path="boards/:boardSlug" element={<BoardWorkspacePage />} />
-          <Route path="automations" element={<AutomationsPage />} />
+          <Route
+            path="automations"
+            element={canAccessAutomations ? <AutomationsPage /> : <Navigate to="/app/dashboard" replace />}
+          />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
 

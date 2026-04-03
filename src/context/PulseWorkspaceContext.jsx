@@ -256,7 +256,7 @@ function createBoardTemplate(name, slug, preferredView, currentUser) {
     columns: [
       { id: `${boardId}-name`, key: 'name', label: 'Task', type: 'text', position: 1, minWidth: 240 },
       { id: `${boardId}-category`, key: 'category', label: 'Category', type: 'text', position: 2, minWidth: 170 },
-      { id: `${boardId}-status`, key: 'status', label: 'Status', type: 'status', position: 3, minWidth: 160 },
+      { id: `${boardId}-status`, key: 'status', label: 'Status', type: 'status', statusOptions: ['Working on it', 'Stuck', 'Done'], position: 3, minWidth: 160 },
       { id: `${boardId}-start`, key: 'start_date', label: 'Start date', type: 'date', position: 4, minWidth: 150 },
       { id: `${boardId}-due`, key: 'due_date', label: 'Due date', type: 'date', position: 5, minWidth: 150 },
       { id: `${boardId}-owner`, key: 'owner', label: 'Owner', type: 'text', position: 6, minWidth: 180 },
@@ -320,6 +320,7 @@ function mapBoardRecord(record, workspaceUsersById) {
       email: entry.email || workspaceUsersById.get(entry.userId)?.email || '',
       permission: entry.permission || 'view',
       accepted: entry.accepted === true,
+      viewColumns: Array.isArray(entry.viewColumns) ? entry.viewColumns : [],
     })),
     deletedFor: (record.deleted_for || []).map((entry) => ({
       userId: entry.userId,
@@ -376,6 +377,7 @@ function boardToRecord(board, workspaceId) {
       email: entry.email,
       permission: entry.permission,
       accepted: entry.accepted === true,
+      viewColumns: Array.isArray(entry.viewColumns) ? entry.viewColumns : [],
     })),
     deleted_for: (board.deletedFor || []).map((entry) => ({
       userId: entry.userId,
@@ -756,6 +758,57 @@ export function PulseWorkspaceProvider({ children }) {
 
         if (error) throw error
       },
+      async updateCurrentUserProfile(updates) {
+        if (!currentUserId) return
+
+        const nextName = String(updates?.name || '').trim()
+        const nextEmail = String(updates?.email || '').trim().toLowerCase()
+
+        if (!nextName || !nextEmail) {
+          throw new Error('Name and email are required.')
+        }
+
+        const { error: authError } = await supabase.auth.updateUser({
+          email: nextEmail !== currentUser?.email ? nextEmail : undefined,
+          data: {
+            full_name: nextName,
+          },
+        })
+
+        if (authError) throw new Error(authError.message)
+
+        const { error: profileError } = await supabase
+          .from('pulse_profiles')
+          .update({
+            name: nextName,
+            email: nextEmail,
+          })
+          .eq('id', currentUserId)
+
+        if (profileError) throw new Error(profileError.message)
+
+        setCurrentUserProfile((current) =>
+          current
+            ? {
+                ...current,
+                name: nextName,
+                email: nextEmail,
+              }
+            : current,
+        )
+
+        setWorkspaceUsers((current) =>
+          current.map((user) =>
+            user.id === currentUserId
+              ? {
+                  ...user,
+                  name: nextName,
+                  email: nextEmail,
+                }
+              : user,
+          ),
+        )
+      },
       async manageWorkspaceUser(payload) {
         const { data, error } = await supabase.functions.invoke('pulse-admin-users', {
           body: payload,
@@ -817,19 +870,36 @@ export function PulseWorkspaceProvider({ children }) {
           return next
         })
       },
-      async shareBoard(boardId, email, permission) {
+      async shareBoard(boardId, email, permission, viewColumns = []) {
         const normalizedEmail = email.trim().toLowerCase()
         const targetUser = workspaceUsers.find((user) => user.email === normalizedEmail)
         const board = allBoards.find((entry) => entry.id === boardId)
         if (!board || !targetUser || !currentUser) return
+        const normalizedViewColumns =
+          permission === 'view' ? Array.from(new Set((viewColumns || []).filter(Boolean))) : []
 
         const nextSharedWith = board.sharedWith.some((entry) => entry.userId === targetUser.id)
           ? board.sharedWith.map((entry) =>
               entry.userId === targetUser.id
-                ? { ...entry, email: targetUser.email, permission, accepted: entry.accepted === true }
+                ? {
+                    ...entry,
+                    email: targetUser.email,
+                    permission,
+                    accepted: entry.accepted === true,
+                    viewColumns: normalizedViewColumns,
+                  }
                 : entry,
             )
-          : [...board.sharedWith, { userId: targetUser.id, email: targetUser.email, permission, accepted: false }]
+          : [
+              ...board.sharedWith,
+              {
+                userId: targetUser.id,
+                email: targetUser.email,
+                permission,
+                accepted: false,
+                viewColumns: normalizedViewColumns,
+              },
+            ]
 
         await updateBoardRecord({ ...board, sharedWith: nextSharedWith })
 
@@ -1006,6 +1076,30 @@ export function PulseWorkspaceProvider({ children }) {
         if (error) throw error
 
         return updatedBoard.slug
+      },
+      async rejectBoardShare(notificationId) {
+        const targetNotification = notifications.find((notification) => notification.id === notificationId)
+        const targetBoardId = targetNotification?.meta?.boardId
+        if (!targetBoardId || !currentUser) return
+
+        const board = allBoards.find((entry) => entry.id === targetBoardId)
+        if (board) {
+          await updateBoardRecord({
+            ...board,
+            sharedWith: board.sharedWith.filter((entry) => entry.userId !== currentUser.id),
+          })
+        }
+
+        setNotifications((current) =>
+          current.filter((notification) => notification.id !== notificationId),
+        )
+
+        const { error } = await supabase
+          .from('pulse_notifications')
+          .delete()
+          .eq('id', notificationId)
+
+        if (error) throw error
       },
       async toggleAutomation(automationId) {
         const targetAutomation = automations.find((automation) => automation.id === automationId)

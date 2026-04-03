@@ -1,5 +1,6 @@
 import { Bot, LayoutDashboard, PanelsTopLeft, Settings } from 'lucide-react'
 import { Link, NavLink } from 'react-router-dom'
+import { usePulseWorkspace } from '../context/PulseWorkspaceContext'
 
 const navItems = [
   { label: 'Dashboard', to: '/app/dashboard', icon: LayoutDashboard },
@@ -9,6 +10,9 @@ const navItems = [
 ]
 
 function SidebarContent({ collapsed, onNavigate }) {
+  const { currentUser } = usePulseWorkspace()
+  const visibleNavItems = navItems.filter((item) => item.to !== '/app/automations' || currentUser?.role === 'admin')
+
   return (
     <>
       <div className="border-b border-slate-100 px-4 py-5">
@@ -31,7 +35,7 @@ function SidebarContent({ collapsed, onNavigate }) {
       </div>
 
       <nav className="space-y-1 p-3">
-        {navItems.map(({ label, to, icon: Icon }) => (
+        {visibleNavItems.map(({ label, to, icon: Icon }) => (
           <NavLink
             key={to}
             to={to}

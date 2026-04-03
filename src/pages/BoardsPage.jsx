@@ -86,6 +86,9 @@ function BoardsPage() {
                 <p className="line-clamp-2 text-xs leading-5 text-slate-600">
                   {board.description}
                 </p>
+                <p className="text-xs font-medium text-slate-500">
+                  Owner: <span className="text-slate-700">{board.ownerEmail}</span>
+                </p>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">

@@ -1,9 +1,21 @@
-import { ChevronDown, ChevronUp, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, Plus, Trash2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { statusColors, statusOptions } from '../data/boardMock'
 
-const columnTypeOptions = ['text', 'number', 'date', 'status', 'boolean', 'location']
+const columnTypeOptions = ['text', 'number', 'currency', 'date', 'status', 'boolean', 'location', 'address', 'phone']
 const textSizeOptions = ['small', 'medium', 'large']
+const COLUMN_MIN_WIDTH = 72
+const COLUMN_MENU_WIDTH = 288
+const VIEWPORT_MENU_PADDING = 12
+const COLUMN_MENU_MAX_HEIGHT = 420
+const statusToneClasses = [
+  'bg-amber-100 text-amber-700',
+  'bg-rose-100 text-rose-700',
+  'bg-emerald-100 text-emerald-700',
+  'bg-sky-100 text-sky-700',
+  'bg-violet-100 text-violet-700',
+  'bg-slate-200 text-slate-700',
+]
 
 function getTextSizeClasses(textSize) {
   if (textSize === 'small') {
@@ -98,17 +110,64 @@ function createRowId() {
   return `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-function getDefaultValue(type) {
+function getDefaultValue(type, column = null) {
   if (type === 'number') return 0
+  if (type === 'currency') return 0
   if (type === 'boolean') return false
-  if (type === 'status') return statusOptions[0]
+  if (type === 'status') return getStatusOptionsForColumn(column)[0] || ''
   return ''
 }
 
 function normalizeInputValue(type, value) {
   if (type === 'number') return Number(value || 0)
+  if (type === 'currency') return Number(value || 0)
   if (type === 'boolean') return value === true || value === 'true'
+  if (type === 'phone') return formatPhoneNumber(value)
   return value
+}
+
+function formatCurrencyValue(value) {
+  const amount = Number(value || 0)
+  if (Number.isNaN(amount)) return '$0.00'
+
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+  }).format(amount)
+}
+
+function formatPhoneNumber(value) {
+  const digits = String(value ?? '')
+    .replace(/\D/g, '')
+    .slice(0, 10)
+
+  if (digits.length <= 3) return digits
+  if (digits.length <= 6) return `${digits.slice(0, 3)}-${digits.slice(3)}`
+  return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
+}
+
+function formatShortDate(value) {
+  if (!value) return '—'
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: '2-digit',
+  }).format(date)
+}
+
+function getStatusOptionsForColumn(column) {
+  return column?.statusOptions?.length ? column.statusOptions : statusOptions
+}
+
+function getStatusTone(value) {
+  if (statusColors[value]) return statusColors[value]
+  const hash = String(value || '')
+    .split('')
+    .reduce((total, character) => total + character.charCodeAt(0), 0)
+  return statusToneClasses[hash % statusToneClasses.length]
 }
 
 function getMapsUrl(value) {
@@ -117,9 +176,33 @@ function getMapsUrl(value) {
 
 function formatColumnValue(value, type) {
   if (type === 'boolean') return value ? 'Yes' : 'No'
-  if (type === 'date') return value || '—'
+  if (type === 'date') return formatShortDate(value)
   if (type === 'number') return value === '' ? '0' : value
+  if (type === 'currency') return formatCurrencyValue(value)
+  if (type === 'phone') return formatPhoneNumber(value) || '—'
   return value || '—'
+}
+
+function getFilterOption(value, type) {
+  if (type === 'boolean') {
+    return {
+      token: value ? 'true' : 'false',
+      label: value ? 'Yes' : 'No',
+    }
+  }
+
+  if (value == null || value === '') {
+    return {
+      token: '__empty__',
+      label: 'Empty',
+    }
+  }
+
+  const label = String(formatColumnValue(value, type))
+  return {
+    token: label,
+    label,
+  }
 }
 
 function formatDateInputValue(value) {
@@ -234,12 +317,6 @@ function getGanttScaleSegments(startTimestamp, endTimestamp, scale) {
   return segments
 }
 
-function getConditionsByType(type) {
-  if (type === 'boolean') return ['true/false']
-  if (type === 'number' || type === 'date') return ['equals', 'greater than']
-  return ['equals', 'contains']
-}
-
 function extractColumnPreferences(columns) {
   return columns.reduce((accumulator, column, index) => {
     accumulator[column.key] = {
@@ -277,9 +354,12 @@ function BoardTable({
   const [boardRows, setBoardRows] = useState(rows)
   const [activeCell, setActiveCell] = useState(null)
   const [openColumnMenu, setOpenColumnMenu] = useState(null)
+  const [columnMenuStyle, setColumnMenuStyle] = useState(null)
   const [showAddColumnForm, setShowAddColumnForm] = useState(false)
   const [newColumn, setNewColumn] = useState({ label: '', type: 'text' })
   const [filters, setFilters] = useState([])
+  const [columnFilterSearch, setColumnFilterSearch] = useState({})
+  const [statusDraftByColumn, setStatusDraftByColumn] = useState({})
   const [viewMode, setViewMode] = useState(initialViewMode)
   const [kanbanEditorRowId, setKanbanEditorRowId] = useState(null)
   const [draggingId, setDraggingId] = useState(null)
@@ -377,6 +457,7 @@ function BoardTable({
         !target.closest('[data-column-menu-trigger]')
       ) {
         setOpenColumnMenu(null)
+        setColumnMenuStyle(null)
       }
 
       if (
@@ -417,6 +498,22 @@ function BoardTable({
     return () => document.removeEventListener('mousedown', handlePointerDown)
   }, [openColumnMenu, openColumnVisibility, openKanbanConfig, openGanttConfig, showAddColumnForm])
 
+  useEffect(() => {
+    if (!openColumnMenu) return
+
+    function handleViewportChange() {
+      setOpenColumnMenu(null)
+      setColumnMenuStyle(null)
+    }
+
+    window.addEventListener('resize', handleViewportChange)
+    window.addEventListener('scroll', handleViewportChange, true)
+    return () => {
+      window.removeEventListener('resize', handleViewportChange)
+      window.removeEventListener('scroll', handleViewportChange, true)
+    }
+  }, [openColumnMenu])
+
   const nextItemNumber = useMemo(() => boardRows.length + 1, [boardRows.length])
   const visibleColumns = useMemo(
     () => boardColumns.filter((column) => column.hidden !== true),
@@ -444,23 +541,30 @@ function BoardTable({
         const column = boardColumns.find((item) => item.key === filter.columnKey)
         if (!column) return true
 
-        const rawValue = row[filter.columnKey]
-        const normalizedValue = String(rawValue ?? '').toLowerCase()
-        const normalizedTarget = String(filter.value ?? '').toLowerCase()
+        if (!filter.values?.length) return true
 
-        if (filter.condition === 'equals') return normalizedValue === normalizedTarget
-        if (filter.condition === 'contains') return normalizedValue.includes(normalizedTarget)
-
-        if (filter.condition === 'greater than') {
-          if (column.type === 'date') return new Date(rawValue).getTime() > new Date(filter.value).getTime()
-          return Number(rawValue) > Number(filter.value)
-        }
-
-        if (filter.condition === 'true/false') return Boolean(rawValue) === (filter.value === 'true')
-        return true
+        const { token } = getFilterOption(row[filter.columnKey], column.type)
+        return filter.values.includes(token)
       }),
     )
   }, [boardColumns, boardRows, filters])
+  const filterOptionsByColumn = useMemo(
+    () =>
+      boardColumns.reduce((accumulator, column) => {
+        const optionMap = new Map()
+        boardRows.forEach((row) => {
+          const option = getFilterOption(row[column.key], column.type)
+          if (!optionMap.has(option.token)) {
+            optionMap.set(option.token, option)
+          }
+        })
+        accumulator[column.key] = Array.from(optionMap.values()).sort((left, right) =>
+          left.label.localeCompare(right.label, undefined, { numeric: true, sensitivity: 'base' }),
+        )
+        return accumulator
+      }, {}),
+    [boardColumns, boardRows],
+  )
 
   const kanbanOptions = useMemo(
     () => boardColumns.filter((column) => column.type === 'text' || column.type === 'status' || column.type === 'boolean'),
@@ -478,12 +582,12 @@ function BoardTable({
     if (!kanbanColumn) return []
 
     if (kanbanColumn.type === 'status') {
-      return statusOptions.map((option) => ({
+      return getStatusOptionsForColumn(kanbanColumn).map((option) => ({
         id: option,
         value: option,
         label: option,
         count: filteredRows.filter((row) => row[kanbanColumn.key] === option).length,
-        tone: statusColors[option],
+        tone: getStatusTone(option),
       }))
     }
 
@@ -562,6 +666,13 @@ function BoardTable({
     () => boardRows.find((row) => row.id === kanbanEditorRowId) || null,
     [boardRows, kanbanEditorRowId],
   )
+  const persistViewConfig = useCallback(
+    (updates) => {
+      if (readOnly || !onViewConfigChange) return
+      onViewConfigChange(updates)
+    },
+    [onViewConfigChange, readOnly],
+  )
 
   useEffect(() => {
     setKanbanCollapsedCardIds((current) => {
@@ -587,13 +698,11 @@ function BoardTable({
         [groupByKey]: nextCollapsed,
       }
 
-      if (onViewConfigChange) {
-        onViewConfigChange({ groupedSectionCollapsedByField: nextValue })
-      }
+      persistViewConfig({ groupedSectionCollapsedByField: nextValue })
 
       return nextValue
     })
-  }, [groupByKey, groupedRows, groupedSectionCollapsedByField, onViewConfigChange])
+  }, [groupByKey, groupedRows, groupedSectionCollapsedByField, persistViewConfig])
 
   useEffect(() => {
     if (!kanbanGroupKey) return
@@ -610,13 +719,11 @@ function BoardTable({
         [kanbanGroupKey]: nextCollapsed,
       }
 
-      if (onViewConfigChange) {
-        onViewConfigChange({ kanbanCollapsedLaneIdsByField: nextValue })
-      }
+      persistViewConfig({ kanbanCollapsedLaneIdsByField: nextValue })
 
       return nextValue
     })
-  }, [kanbanCollapsedLaneIdsByField, kanbanGroupKey, kanbanLaneDefinitions, onViewConfigChange])
+  }, [kanbanCollapsedLaneIdsByField, kanbanGroupKey, kanbanLaneDefinitions, persistViewConfig])
 
   const pushBoardChange = useCallback(
     (nextColumns, nextRows) => {
@@ -676,7 +783,7 @@ function BoardTable({
         return accumulator
       }
 
-      accumulator[column.key] = getDefaultValue(column.type)
+      accumulator[column.key] = getDefaultValue(column.type, column)
       return accumulator
     }, {})
 
@@ -724,7 +831,7 @@ function BoardTable({
           return accumulator
         }
 
-        accumulator[column.key] = getDefaultValue(column.type)
+        accumulator[column.key] = getDefaultValue(column.type, column)
         return accumulator
       }, {})
 
@@ -746,7 +853,8 @@ function BoardTable({
       key: uniqueKey,
       label: cleanLabel,
       type: newColumn.type,
-      minWidth: 170,
+      ...(newColumn.type === 'status' ? { statusOptions: [...statusOptions] } : {}),
+      minWidth: 140,
       position: boardColumns.length + 1,
       hidden: false,
     }
@@ -754,7 +862,7 @@ function BoardTable({
     const nextColumns = [...boardColumns, createdColumn]
     setBoardColumns(nextColumns)
     setBoardRows((currentRows) => {
-      const nextRows = currentRows.map((row) => ({ ...row, [uniqueKey]: getDefaultValue(newColumn.type) }))
+      const nextRows = currentRows.map((row) => ({ ...row, [uniqueKey]: getDefaultValue(newColumn.type, createdColumn) }))
       pushBoardChange(nextColumns, nextRows)
       return nextRows
     })
@@ -762,50 +870,58 @@ function BoardTable({
     setShowAddColumnForm(false)
   }, [boardColumns, newColumn, pushBoardChange])
 
-  const addFilterForColumn = useCallback((columnKey) => {
-    const selectedColumn = boardColumns.find((column) => column.key === columnKey)
-    if (!selectedColumn) return
-    const defaultCondition = getConditionsByType(selectedColumn.type)[0]
-    setFilters((currentFilters) => [
-      ...currentFilters,
-      {
-        id: `filter-${Date.now()}`,
-        columnKey,
-        condition: defaultCondition,
-        value: selectedColumn.type === 'boolean' ? 'true' : '',
-      },
-    ])
-    setOpenColumnMenu(null)
-  }, [boardColumns])
+  const toggleFilterValue = useCallback((columnKey, valueToken) => {
+    setFilters((currentFilters) => {
+      const existingFilter = currentFilters.find((filter) => filter.columnKey === columnKey)
 
-  const updateFilter = useCallback(
-    (filterId, updates) => {
-      setFilters((currentFilters) =>
-        currentFilters.map((filter) => {
-          if (filter.id !== filterId) return filter
+      if (!existingFilter) {
+        return [...currentFilters, { columnKey, values: [valueToken] }]
+      }
 
-          const nextFilter = { ...filter, ...updates }
-          const selectedColumn = boardColumns.find((column) => column.key === nextFilter.columnKey)
+      const nextValues = existingFilter.values.includes(valueToken)
+        ? existingFilter.values.filter((entry) => entry !== valueToken)
+        : [...existingFilter.values, valueToken]
 
-          if (updates.columnKey && selectedColumn) {
-            nextFilter.condition = getConditionsByType(selectedColumn.type)[0]
-            nextFilter.value = selectedColumn.type === 'boolean' ? 'true' : ''
-          }
+      if (nextValues.length === 0) {
+        return currentFilters.filter((filter) => filter.columnKey !== columnKey)
+      }
 
-          return nextFilter
-        }),
+      return currentFilters.map((filter) =>
+        filter.columnKey === columnKey
+          ? {
+              ...filter,
+              values: nextValues,
+            }
+          : filter,
       )
-    },
-    [boardColumns],
-  )
+    })
+  }, [])
 
-  const removeFilter = useCallback((filterId) => {
-    setFilters((currentFilters) => currentFilters.filter((filter) => filter.id !== filterId))
+  const setFilterValues = useCallback((columnKey, values) => {
+    setFilters((currentFilters) => {
+      const nextValues = Array.from(new Set(values.filter(Boolean)))
+      if (nextValues.length === 0) {
+        return currentFilters.filter((filter) => filter.columnKey !== columnKey)
+      }
+
+      const existingFilter = currentFilters.find((filter) => filter.columnKey === columnKey)
+      if (!existingFilter) {
+        return [...currentFilters, { columnKey, values: nextValues }]
+      }
+
+      return currentFilters.map((filter) =>
+        filter.columnKey === columnKey
+          ? {
+              ...filter,
+              values: nextValues,
+            }
+          : filter,
+      )
+    })
   }, [])
 
   const clearFiltersForColumn = useCallback((columnKey) => {
     setFilters((currentFilters) => currentFilters.filter((filter) => filter.columnKey !== columnKey))
-    setOpenColumnMenu(null)
   }, [])
 
   const changeColumnType = useCallback(
@@ -813,7 +929,13 @@ function BoardTable({
       if (!columnTypeOptions.includes(nextType)) return
 
       const nextColumns = boardColumns.map((column) =>
-        column.key === columnKey ? { ...column, type: nextType } : column,
+        column.key === columnKey
+          ? {
+              ...column,
+              type: nextType,
+              ...(nextType === 'status' ? { statusOptions: getStatusOptionsForColumn(column) } : { statusOptions: undefined }),
+            }
+          : column,
       )
 
       setBoardColumns(nextColumns)
@@ -858,9 +980,7 @@ function BoardTable({
     if (columnKey === kanbanGroupKey) {
       setKanbanGroupKey('')
       setOpenKanbanConfig(true)
-      if (onViewConfigChange) {
-        onViewConfigChange({ kanbanGroupBy: '' })
-      }
+      persistViewConfig({ kanbanGroupBy: '' })
     }
     setBoardColumns(nextColumns)
     setBoardRows((currentRows) => {
@@ -874,7 +994,76 @@ function BoardTable({
     })
     setFilters((currentFilters) => currentFilters.filter((filter) => filter.columnKey !== columnKey))
     setOpenColumnMenu(null)
-  }, [boardColumns, groupByKey, kanbanGroupKey, onViewConfigChange, pushBoardChange])
+  }, [boardColumns, groupByKey, kanbanGroupKey, persistViewConfig, pushBoardChange])
+
+  const addStatusOption = useCallback(
+    (columnKey) => {
+      const nextLabel = String(statusDraftByColumn[columnKey] || '').trim()
+      if (!nextLabel) return
+
+      const targetColumn = boardColumns.find((column) => column.key === columnKey)
+      if (!targetColumn || targetColumn.type !== 'status') return
+
+      const nextOptions = Array.from(new Set([...getStatusOptionsForColumn(targetColumn), nextLabel]))
+      const nextColumns = boardColumns.map((column) =>
+        column.key === columnKey ? { ...column, statusOptions: nextOptions } : column,
+      )
+      setBoardColumns(nextColumns)
+      pushBoardChange(nextColumns, boardRows)
+      setStatusDraftByColumn((current) => ({ ...current, [columnKey]: '' }))
+    },
+    [boardColumns, boardRows, pushBoardChange, statusDraftByColumn],
+  )
+
+  const renameStatusOption = useCallback(
+    (columnKey, currentLabel) => {
+      const nextLabel = window.prompt('Rename status', currentLabel)?.trim()
+      if (!nextLabel || nextLabel === currentLabel) return
+
+      const targetColumn = boardColumns.find((column) => column.key === columnKey)
+      if (!targetColumn || targetColumn.type !== 'status') return
+
+      const nextOptions = getStatusOptionsForColumn(targetColumn).map((option) =>
+        option === currentLabel ? nextLabel : option,
+      )
+      const nextColumns = boardColumns.map((column) =>
+        column.key === columnKey ? { ...column, statusOptions: Array.from(new Set(nextOptions)) } : column,
+      )
+      const nextRows = boardRows.map((row) =>
+        row[columnKey] === currentLabel ? { ...row, [columnKey]: nextLabel } : row,
+      )
+      setBoardColumns(nextColumns)
+      setBoardRows(nextRows)
+      pushBoardChange(nextColumns, nextRows)
+    },
+    [boardColumns, boardRows, pushBoardChange],
+  )
+
+  const deleteStatusOption = useCallback(
+    (columnKey, optionLabel) => {
+      const targetColumn = boardColumns.find((column) => column.key === columnKey)
+      if (!targetColumn || targetColumn.type !== 'status') return
+
+      const currentOptions = getStatusOptionsForColumn(targetColumn)
+      if (currentOptions.length <= 1) return
+
+      const shouldDelete = window.confirm(`Delete status "${optionLabel}"?`)
+      if (!shouldDelete) return
+
+      const nextOptions = currentOptions.filter((option) => option !== optionLabel)
+      const fallbackValue = nextOptions[0] || ''
+      const nextColumns = boardColumns.map((column) =>
+        column.key === columnKey ? { ...column, statusOptions: nextOptions } : column,
+      )
+      const nextRows = boardRows.map((row) =>
+        row[columnKey] === optionLabel ? { ...row, [columnKey]: fallbackValue } : row,
+      )
+      setBoardColumns(nextColumns)
+      setBoardRows(nextRows)
+      pushBoardChange(nextColumns, nextRows)
+    },
+    [boardColumns, boardRows, pushBoardChange],
+  )
 
   const toggleColumnVisibility = useCallback(
     (columnKey) => {
@@ -883,11 +1072,9 @@ function BoardTable({
       )
 
       setBoardColumns(nextColumns)
-      if (onViewConfigChange) {
-        onViewConfigChange({ columnPreferences: extractColumnPreferences(nextColumns) })
-      }
+      persistViewConfig({ columnPreferences: extractColumnPreferences(nextColumns) })
     },
-    [boardColumns, onViewConfigChange],
+    [boardColumns, persistViewConfig],
   )
 
   const reorderColumns = useCallback(
@@ -908,26 +1095,22 @@ function BoardTable({
       }))
 
       setBoardColumns(normalizedColumns)
-      if (onViewConfigChange) {
-        onViewConfigChange({ columnPreferences: extractColumnPreferences(normalizedColumns) })
-      }
+      persistViewConfig({ columnPreferences: extractColumnPreferences(normalizedColumns) })
     },
-    [boardColumns, onViewConfigChange],
+    [boardColumns, persistViewConfig],
   )
 
   const resizeColumn = useCallback(
     (columnKey, nextWidth) => {
-      const normalizedWidth = Math.max(120, nextWidth)
+      const normalizedWidth = Math.max(COLUMN_MIN_WIDTH, nextWidth)
       const nextColumns = boardColumns.map((column) =>
         column.key === columnKey ? { ...column, minWidth: normalizedWidth } : column,
       )
 
       setBoardColumns(nextColumns)
-      if (onViewConfigChange) {
-        onViewConfigChange({ columnPreferences: extractColumnPreferences(nextColumns) })
-      }
+      persistViewConfig({ columnPreferences: extractColumnPreferences(nextColumns) })
     },
-    [boardColumns, onViewConfigChange],
+    [boardColumns, persistViewConfig],
   )
 
   const handleDropToStatus = useCallback(
@@ -955,19 +1138,17 @@ function BoardTable({
     (nextKey) => {
       setKanbanGroupKey(nextKey)
       setOpenKanbanConfig(false)
-      if (!onViewConfigChange) return
-      onViewConfigChange({ kanbanGroupBy: nextKey })
+      persistViewConfig({ kanbanGroupBy: nextKey })
     },
-    [onViewConfigChange],
+    [persistViewConfig],
   )
 
   const handleKanbanPrimaryFieldChange = useCallback(
     (nextKey) => {
       setKanbanPrimaryField(nextKey)
-      if (!onViewConfigChange) return
-      onViewConfigChange({ kanbanPrimaryField: nextKey })
+      persistViewConfig({ kanbanPrimaryField: nextKey })
     },
-    [onViewConfigChange],
+    [persistViewConfig],
   )
 
   const handleKanbanCardFieldToggle = useCallback(
@@ -977,14 +1158,12 @@ function BoardTable({
           ? current.filter((entry) => entry !== fieldKey)
           : [...current, fieldKey]
 
-        if (onViewConfigChange) {
-          onViewConfigChange({ kanbanCardFields: nextFields })
-        }
+        persistViewConfig({ kanbanCardFields: nextFields })
 
         return nextFields
       })
     },
-    [onViewConfigChange],
+    [persistViewConfig],
   )
 
   const toggleKanbanLaneCollapse = useCallback(
@@ -1001,14 +1180,12 @@ function BoardTable({
           [kanbanGroupKey]: nextLaneIds,
         }
 
-        if (onViewConfigChange) {
-          onViewConfigChange({ kanbanCollapsedLaneIdsByField: nextValue })
-        }
+        persistViewConfig({ kanbanCollapsedLaneIdsByField: nextValue })
 
         return nextValue
       })
     },
-    [kanbanGroupKey, onViewConfigChange],
+    [kanbanGroupKey, persistViewConfig],
   )
 
   const toggleKanbanCardCollapse = useCallback(
@@ -1025,19 +1202,17 @@ function BoardTable({
   const handleViewModeChange = useCallback(
     (nextMode) => {
       setViewMode(nextMode)
-      if (!onViewConfigChange) return
-      onViewConfigChange({ preferredView: nextMode })
+      persistViewConfig({ preferredView: nextMode })
     },
-    [onViewConfigChange],
+    [persistViewConfig],
   )
 
   const handleGroupByChange = useCallback(
     (nextKey) => {
       setGroupByKey(nextKey)
-      if (!onViewConfigChange) return
-      onViewConfigChange({ groupByKey: nextKey })
+      persistViewConfig({ groupByKey: nextKey })
     },
-    [onViewConfigChange],
+    [persistViewConfig],
   )
 
   const toggleGroupedSection = useCallback(
@@ -1054,14 +1229,12 @@ function BoardTable({
           [groupByKey]: nextLabels,
         }
 
-        if (onViewConfigChange) {
-          onViewConfigChange({ groupedSectionCollapsedByField: nextValue })
-        }
+        persistViewConfig({ groupedSectionCollapsedByField: nextValue })
 
         return nextValue
       })
     },
-    [groupByKey, onViewConfigChange],
+    [groupByKey, persistViewConfig],
   )
 
   const deleteRow = useCallback(
@@ -1087,16 +1260,48 @@ function BoardTable({
   const handleTextSizeChange = useCallback(
     (nextSize) => {
       setTextSize(nextSize)
-      if (!onViewConfigChange) return
-      onViewConfigChange({ textSize: nextSize })
+      persistViewConfig({ textSize: nextSize })
     },
-    [onViewConfigChange],
+    [persistViewConfig],
   )
 
   const isEditing = useCallback(
     (rowId, columnKey) => activeCell?.rowId === rowId && activeCell?.columnKey === columnKey,
     [activeCell],
   )
+
+  const toggleColumnMenu = useCallback((event, menuKey) => {
+    setOpenColumnMenu((currentValue) => {
+      if (currentValue === menuKey) {
+        setColumnMenuStyle(null)
+        return null
+      }
+
+      const rect = event.currentTarget.getBoundingClientRect()
+      const viewportWidth = window.innerWidth
+      const viewportHeight = window.innerHeight
+      const left = Math.min(
+        Math.max(VIEWPORT_MENU_PADDING, rect.right - COLUMN_MENU_WIDTH),
+        viewportWidth - COLUMN_MENU_WIDTH - VIEWPORT_MENU_PADDING,
+      )
+      const availableBelow = viewportHeight - rect.bottom - VIEWPORT_MENU_PADDING
+      const availableAbove = rect.top - VIEWPORT_MENU_PADDING
+      const shouldOpenAbove = availableBelow < 220 && availableAbove > availableBelow
+      const maxHeight = Math.max(180, viewportHeight - VIEWPORT_MENU_PADDING * 2)
+      const top = shouldOpenAbove
+        ? Math.max(VIEWPORT_MENU_PADDING, rect.top - Math.min(COLUMN_MENU_MAX_HEIGHT, availableAbove))
+        : Math.min(rect.bottom + 8, viewportHeight - Math.min(COLUMN_MENU_MAX_HEIGHT, maxHeight) - VIEWPORT_MENU_PADDING)
+
+      setColumnMenuStyle({
+        position: 'fixed',
+        top,
+        left,
+        width: COLUMN_MENU_WIDTH,
+        maxHeight: Math.min(COLUMN_MENU_MAX_HEIGHT, maxHeight),
+      })
+      return menuKey
+    })
+  }, [])
 
   if (loading) return <BoardLoadingState />
 
@@ -1169,14 +1374,23 @@ function BoardTable({
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                data-add-column-trigger
-                className="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
-                onClick={() => setShowAddColumnForm(true)}
-              >
-                + Add column
-              </button>
+              <>
+                <button
+                  type="button"
+                  data-add-column-trigger
+                  className="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
+                  onClick={() => setShowAddColumnForm(true)}
+                >
+                  + Add column
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
+                  onClick={addRow}
+                >
+                  + Add new row
+                </button>
+              </>
             ))}
 
           <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
@@ -1383,7 +1597,7 @@ function BoardTable({
                 onChange={(event) => {
                   const nextKey = event.target.value
                   setGanttStartKey(nextKey)
-                  onViewConfigChange?.({ ganttStartKey: nextKey })
+                  persistViewConfig({ ganttStartKey: nextKey })
                 }}
               >
                 <option value="">Select a date column</option>
@@ -1403,7 +1617,7 @@ function BoardTable({
                 onChange={(event) => {
                   const nextKey = event.target.value
                   setGanttEndKey(nextKey)
-                  onViewConfigChange?.({ ganttEndKey: nextKey })
+                  persistViewConfig({ ganttEndKey: nextKey })
                 }}
               >
                 <option value="">Same as start date</option>
@@ -1423,7 +1637,7 @@ function BoardTable({
                 onChange={(event) => {
                   const nextKey = event.target.value
                   setGanttGroupByKey(nextKey)
-                  onViewConfigChange?.({ ganttGroupByKey: nextKey })
+                  persistViewConfig({ ganttGroupByKey: nextKey })
                 }}
               >
                 <option value="">No sections</option>
@@ -1449,14 +1663,22 @@ function BoardTable({
             groupedRows={groupedRows}
             isEditing={isEditing}
             openColumnMenu={openColumnMenu}
-            setOpenColumnMenu={setOpenColumnMenu}
             filters={filters}
-            updateFilter={updateFilter}
-            removeFilter={removeFilter}
-            addFilterForColumn={addFilterForColumn}
+            toggleColumnMenu={toggleColumnMenu}
+            columnMenuStyle={columnMenuStyle}
+            columnFilterSearch={columnFilterSearch}
+            setColumnFilterSearch={setColumnFilterSearch}
+            filterOptionsByColumn={filterOptionsByColumn}
+            setFilterValues={setFilterValues}
+            toggleFilterValue={toggleFilterValue}
             clearFiltersForColumn={clearFiltersForColumn}
             renameColumn={renameColumn}
             changeColumnType={changeColumnType}
+            addStatusOption={addStatusOption}
+            renameStatusOption={renameStatusOption}
+            deleteStatusOption={deleteStatusOption}
+            statusDraftByColumn={statusDraftByColumn}
+            setStatusDraftByColumn={setStatusDraftByColumn}
             deleteColumn={deleteColumn}
             reorderColumns={reorderColumns}
             resizeColumn={resizeColumn}
@@ -1480,14 +1702,22 @@ function BoardTable({
             filteredRows={filteredRows}
             isEditing={isEditing}
             openColumnMenu={openColumnMenu}
-            setOpenColumnMenu={setOpenColumnMenu}
             filters={filters}
-            updateFilter={updateFilter}
-            removeFilter={removeFilter}
-            addFilterForColumn={addFilterForColumn}
+            toggleColumnMenu={toggleColumnMenu}
+            columnMenuStyle={columnMenuStyle}
+            columnFilterSearch={columnFilterSearch}
+            setColumnFilterSearch={setColumnFilterSearch}
+            filterOptionsByColumn={filterOptionsByColumn}
+            setFilterValues={setFilterValues}
+            toggleFilterValue={toggleFilterValue}
             clearFiltersForColumn={clearFiltersForColumn}
             renameColumn={renameColumn}
             changeColumnType={changeColumnType}
+            addStatusOption={addStatusOption}
+            renameStatusOption={renameStatusOption}
+            deleteStatusOption={deleteStatusOption}
+            statusDraftByColumn={statusDraftByColumn}
+            setStatusDraftByColumn={setStatusDraftByColumn}
             deleteColumn={deleteColumn}
             reorderColumns={reorderColumns}
             resizeColumn={resizeColumn}
@@ -1533,16 +1763,6 @@ function BoardTable({
         )}
       </div>
 
-      {!readOnly && (
-        <button
-          type="button"
-          className="inline-flex items-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
-          onClick={addRow}
-        >
-          + Add new row
-        </button>
-      )}
-
       {!readOnly && kanbanEditorRow && (
         <KanbanRowEditorModal
           row={kanbanEditorRow}
@@ -1566,14 +1786,22 @@ const TableView = memo(function TableView({
   filteredRows,
   isEditing,
   openColumnMenu,
-  setOpenColumnMenu,
   filters,
-  updateFilter,
-  removeFilter,
-  addFilterForColumn,
+  toggleColumnMenu,
+  columnMenuStyle,
+  columnFilterSearch,
+  setColumnFilterSearch,
+  filterOptionsByColumn,
+  setFilterValues,
+  toggleFilterValue,
   clearFiltersForColumn,
   renameColumn,
   changeColumnType,
+  addStatusOption,
+  renameStatusOption,
+  deleteStatusOption,
+  statusDraftByColumn,
+  setStatusDraftByColumn,
   deleteColumn,
   reorderColumns,
   resizeColumn,
@@ -1589,7 +1817,7 @@ const TableView = memo(function TableView({
   const columnFilters = useMemo(
     () =>
       visibleColumns.reduce((accumulator, column) => {
-        accumulator[column.key] = filters.filter((filter) => filter.columnKey === column.key)
+        accumulator[column.key] = filters.find((filter) => filter.columnKey === column.key) || null
         return accumulator
       }, {}),
     [filters, visibleColumns],
@@ -1600,7 +1828,7 @@ const TableView = memo(function TableView({
     event.stopPropagation()
 
     const startingX = event.clientX
-    const startingWidth = column.minWidth || 170
+    const startingWidth = column.minWidth || 140
 
     function handleMouseMove(moveEvent) {
       resizeColumn(column.key, startingWidth + (moveEvent.clientX - startingX))
@@ -1635,17 +1863,17 @@ const TableView = memo(function TableView({
                 style={{ minWidth: column.minWidth }}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <span className={draggingColumnKey === column.key ? 'opacity-40' : undefined}>{column.label}</span>
+                  <span
+                    className={`line-clamp-2 whitespace-normal break-words leading-tight ${draggingColumnKey === column.key ? 'opacity-40' : ''}`}
+                  >
+                    {column.label}
+                  </span>
                   {!readOnly && (
                     <button
                       type="button"
                       data-column-menu-trigger
                       className="rounded px-1.5 py-0.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                      onClick={() =>
-                        setOpenColumnMenu((currentValue) =>
-                          currentValue === `${menuScope}:${column.key}` ? null : `${menuScope}:${column.key}`,
-                        )
-                      }
+                      onClick={(event) => toggleColumnMenu(event, `${menuScope}:${column.key}`)}
                     >
                       ⋯
                     </button>
@@ -1653,7 +1881,24 @@ const TableView = memo(function TableView({
                 </div>
 
                 {!readOnly && openColumnMenu === `${menuScope}:${column.key}` && (
-                  <div data-column-menu className="absolute right-2 top-10 z-20 w-72 rounded-lg border border-slate-200 bg-white p-2 shadow-soft">
+                  <div
+                    data-column-menu
+                    className="z-[70] overflow-y-auto rounded-lg border border-slate-200 bg-white p-2 shadow-soft"
+                    style={columnMenuStyle || undefined}
+                  >
+                    {(() => {
+                      const searchValue = columnFilterSearch[column.key] || ''
+                      const selectedValues = columnFilters[column.key]?.values || []
+                      const allFilterOptions = filterOptionsByColumn[column.key] || []
+                      const visibleFilterOptions = allFilterOptions.filter((option) =>
+                        option.label.toLowerCase().includes(searchValue.toLowerCase()),
+                      )
+                      const allVisibleSelected =
+                        visibleFilterOptions.length > 0 &&
+                        visibleFilterOptions.every((option) => selectedValues.includes(option.token))
+
+                      return (
+                        <>
                     <button
                       type="button"
                       className="block w-full rounded px-2 py-1 text-left text-xs text-slate-700 transition hover:bg-slate-50"
@@ -1675,6 +1920,63 @@ const TableView = memo(function TableView({
                         ))}
                       </select>
                     </div>
+                    {column.type === 'status' && (
+                      <div className="mt-2 space-y-2 border-t border-slate-200 px-2 py-2">
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Statuses</p>
+                        <div className="space-y-1.5">
+                          {getStatusOptionsForColumn(column).map((option) => (
+                            <div key={option} className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1.5">
+                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${getStatusTone(option)}`}>
+                                {option}
+                              </span>
+                              <button
+                                type="button"
+                                className="ml-auto text-[11px] font-medium text-slate-500 transition hover:text-slate-800"
+                                onClick={() => renameStatusOption(column.key, option)}
+                              >
+                                Edit
+                              </button>
+                              <button
+                                type="button"
+                                className="text-[11px] font-medium text-rose-600 transition hover:text-rose-700 disabled:opacity-40"
+                                onClick={() => deleteStatusOption(column.key, option)}
+                                disabled={getStatusOptionsForColumn(column).length <= 1}
+                              >
+                                Delete
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="text"
+                            value={statusDraftByColumn[column.key] || ''}
+                            onChange={(event) =>
+                              setStatusDraftByColumn((current) => ({
+                                ...current,
+                                [column.key]: event.target.value,
+                              }))
+                            }
+                            onKeyDown={(event) => {
+                              if (event.key === 'Enter') {
+                                event.preventDefault()
+                                addStatusOption(column.key)
+                              }
+                            }}
+                            placeholder="Add status"
+                            className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs outline-none"
+                          />
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1.5 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50"
+                            onClick={() => addStatusOption(column.key)}
+                          >
+                            <Plus size={12} />
+                            Add
+                          </button>
+                        </div>
+                      </div>
+                    )}
                     <button
                       type="button"
                       className="block w-full rounded px-2 py-1 text-left text-xs text-rose-600 transition hover:bg-rose-50"
@@ -1685,11 +1987,68 @@ const TableView = memo(function TableView({
                     <button
                       type="button"
                       className="mt-1 block w-full rounded px-2 py-1 text-left text-xs text-slate-700 transition hover:bg-slate-50"
-                      onClick={() => addFilterForColumn(column.key)}
+                      onClick={() =>
+                        setFilterValues(
+                          column.key,
+                          visibleFilterOptions.map((option) => option.token),
+                        )
+                      }
                     >
-                      Add filter
+                      Select visible
                     </button>
-                    {columnFilters[column.key]?.length > 0 && (
+                    <div className="mt-2 space-y-2 border-t border-slate-200 pt-2">
+                      <input
+                        type="search"
+                        value={searchValue}
+                        onChange={(event) =>
+                          setColumnFilterSearch((current) => ({
+                            ...current,
+                            [column.key]: event.target.value,
+                          }))
+                        }
+                        placeholder="Search values"
+                        className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs outline-none"
+                      />
+                      <label className="flex items-center gap-2 rounded-md px-1 py-1 text-xs font-medium text-slate-700">
+                        <input
+                          type="checkbox"
+                          checked={allVisibleSelected}
+                          onChange={() => {
+                            if (allVisibleSelected) {
+                              const visibleTokens = new Set(visibleFilterOptions.map((option) => option.token))
+                              setFilterValues(
+                                column.key,
+                                selectedValues.filter((token) => !visibleTokens.has(token)),
+                              )
+                              return
+                            }
+
+                            setFilterValues(column.key, [
+                              ...selectedValues,
+                              ...visibleFilterOptions.map((option) => option.token),
+                            ])
+                          }}
+                        />
+                        Select all visible
+                      </label>
+                      <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+                        {visibleFilterOptions.length === 0 ? (
+                          <p className="px-1 py-2 text-xs text-slate-500">No values match this search.</p>
+                        ) : (
+                          visibleFilterOptions.map((option) => (
+                            <label key={option.token} className="flex items-center gap-2 rounded-md px-1 py-1 text-xs text-slate-700 hover:bg-white">
+                              <input
+                                type="checkbox"
+                                checked={selectedValues.includes(option.token)}
+                                onChange={() => toggleFilterValue(column.key, option.token)}
+                              />
+                              <span className="min-w-0 break-words">{option.label}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                    {columnFilters[column.key] && (
                       <>
                         <button
                           type="button"
@@ -1698,59 +2057,11 @@ const TableView = memo(function TableView({
                         >
                           Clear filters
                         </button>
-                        <div className="mt-2 space-y-2 border-t border-slate-200 pt-2">
-                          {columnFilters[column.key].map((filter) => {
-                            const conditionOptions = getConditionsByType(column.type)
-                            const showBooleanValue = filter.condition === 'true/false'
-
-                            return (
-                              <div key={filter.id} className="space-y-2 rounded-md bg-slate-50 p-2">
-                                <select
-                                  className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs outline-none"
-                                  value={filter.condition}
-                                  onChange={(event) => updateFilter(filter.id, { condition: event.target.value })}
-                                >
-                                  {conditionOptions.map((option) => (
-                                    <option key={option} value={option}>
-                                      {option}
-                                    </option>
-                                  ))}
-                                </select>
-                                {showBooleanValue ? (
-                                  <select
-                                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs outline-none"
-                                    value={filter.value}
-                                    onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
-                                  >
-                                    <option value="true">True</option>
-                                    <option value="false">False</option>
-                                  </select>
-                                ) : (
-                                  <input
-                                    className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs outline-none"
-                                    placeholder="Filter value"
-                                    value={filter.value}
-                                    type={column.type === 'date' ? 'date' : column.type === 'number' ? 'number' : 'text'}
-                                    onChange={(event) => updateFilter(filter.id, { value: event.target.value })}
-                                  />
-                                )}
-                                <button
-                                  type="button"
-                                  className="block w-full rounded border border-slate-200 px-2 py-1 text-left text-[11px] text-slate-500 transition hover:bg-white"
-                                  onClick={() => {
-                                    const shouldRemove = window.confirm('Remove this filter?')
-                                    if (!shouldRemove) return
-                                    removeFilter(filter.id)
-                                  }}
-                                >
-                                  Remove filter
-                                </button>
-                              </div>
-                            )
-                          })}
-                        </div>
                       </>
                     )}
+                        </>
+                      )
+                    })()}
                   </div>
                 )}
 
@@ -1828,14 +2139,22 @@ const GroupedTableView = memo(function GroupedTableView({
   groupedRows,
   isEditing,
   openColumnMenu,
-  setOpenColumnMenu,
   filters,
-  updateFilter,
-  removeFilter,
-  addFilterForColumn,
+  toggleColumnMenu,
+  columnMenuStyle,
+  columnFilterSearch,
+  setColumnFilterSearch,
+  filterOptionsByColumn,
+  setFilterValues,
+  toggleFilterValue,
   clearFiltersForColumn,
   renameColumn,
   changeColumnType,
+  addStatusOption,
+  renameStatusOption,
+  deleteStatusOption,
+  statusDraftByColumn,
+  setStatusDraftByColumn,
   deleteColumn,
   reorderColumns,
   resizeColumn,
@@ -1887,18 +2206,26 @@ const GroupedTableView = memo(function GroupedTableView({
               menuScope={`${menuScopePrefix}:${group.label}`}
               boardColumns={boardColumns}
               visibleColumns={visibleColumns}
-              filteredRows={group.items}
-              isEditing={isEditing}
-              openColumnMenu={openColumnMenu}
-              setOpenColumnMenu={setOpenColumnMenu}
-              filters={filters}
-              updateFilter={updateFilter}
-              removeFilter={removeFilter}
-              addFilterForColumn={addFilterForColumn}
-              clearFiltersForColumn={clearFiltersForColumn}
-              renameColumn={renameColumn}
-              changeColumnType={changeColumnType}
-              deleteColumn={deleteColumn}
+            filteredRows={group.items}
+            isEditing={isEditing}
+            openColumnMenu={openColumnMenu}
+            filters={filters}
+            toggleColumnMenu={toggleColumnMenu}
+            columnMenuStyle={columnMenuStyle}
+            columnFilterSearch={columnFilterSearch}
+            setColumnFilterSearch={setColumnFilterSearch}
+            filterOptionsByColumn={filterOptionsByColumn}
+            setFilterValues={setFilterValues}
+            toggleFilterValue={toggleFilterValue}
+            clearFiltersForColumn={clearFiltersForColumn}
+            renameColumn={renameColumn}
+            changeColumnType={changeColumnType}
+            addStatusOption={addStatusOption}
+            renameStatusOption={renameStatusOption}
+            deleteStatusOption={deleteStatusOption}
+            statusDraftByColumn={statusDraftByColumn}
+            setStatusDraftByColumn={setStatusDraftByColumn}
+            deleteColumn={deleteColumn}
               reorderColumns={reorderColumns}
               resizeColumn={resizeColumn}
               draggingColumnKey={draggingColumnKey}
@@ -2107,6 +2434,7 @@ function GanttView({ rows, columns, ganttStartKey, ganttEndKey, ganttGroupByKey,
   const endTimestamp = Math.max(...itemsWithDates.map((row) => new Date(row.__ganttEnd).getTime()))
   const totalDays = Math.max(1, Math.round((endTimestamp - startTimestamp) / (1000 * 60 * 60 * 24)) + 1)
   const timelineSegments = getGanttScaleSegments(startTimestamp, endTimestamp, scale)
+  const useVerticalLabels = timelineSegments.length > 12 || (scale === 'day' && timelineSegments.length > 8)
   const groupedItems = ganttGroupByKey
     ? itemsWithDates.reduce((accumulator, row) => {
         const label = row.__ganttGroup || 'Uncategorized'
@@ -2159,11 +2487,17 @@ function GanttView({ rows, columns, ganttStartKey, ganttEndKey, ganttGroupByKey,
               {timelineSegments.map((segment) => (
                 <div
                   key={segment.key}
-                  className="flex min-h-16 items-end justify-center rounded-md border border-slate-200 bg-slate-50 px-0.5 py-1"
+                  className={`flex justify-center rounded-md border border-slate-200 bg-slate-50 px-1 py-1 ${
+                    useVerticalLabels ? 'min-h-16 items-end' : 'min-h-10 items-center'
+                  }`}
                 >
                   <span
                     className="text-[10px] font-semibold leading-none text-slate-700"
-                    style={{ writingMode: 'vertical-rl', textOrientation: 'mixed', transform: 'rotate(180deg)' }}
+                    style={
+                      useVerticalLabels
+                        ? { writingMode: 'vertical-rl', textOrientation: 'mixed', transform: 'rotate(180deg)' }
+                        : undefined
+                    }
                   >
                     {segment.label}
                   </span>
@@ -2243,7 +2577,7 @@ function EmptyState({ onClearFilters }) {
 function KanbanRowEditorModal({ row, columns, onClose, onDelete, onSave }) {
   const [draft, setDraft] = useState(() =>
     columns.reduce((accumulator, column) => {
-      accumulator[column.key] = row[column.key] ?? getDefaultValue(column.type)
+      accumulator[column.key] = row[column.key] ?? getDefaultValue(column.type, column)
       return accumulator
     }, {}),
   )
@@ -2251,7 +2585,7 @@ function KanbanRowEditorModal({ row, columns, onClose, onDelete, onSave }) {
   useEffect(() => {
     setDraft(
       columns.reduce((accumulator, column) => {
-        accumulator[column.key] = row[column.key] ?? getDefaultValue(column.type)
+        accumulator[column.key] = row[column.key] ?? getDefaultValue(column.type, column)
         return accumulator
       }, {}),
     )
@@ -2299,13 +2633,13 @@ function KanbanRowEditorModal({ row, columns, onClose, onDelete, onSave }) {
                 <span className="text-sm font-medium text-slate-900">{column.label}</span>
                 {column.type === 'status' ? (
                   <select
-                    value={draft[column.key] ?? statusOptions[0]}
+                    value={draft[column.key] ?? getStatusOptionsForColumn(column)[0] ?? ''}
                     onChange={(event) =>
                       setDraft((current) => ({ ...current, [column.key]: event.target.value }))
                     }
                     className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
                   >
-                    {statusOptions.map((option) => (
+                    {getStatusOptionsForColumn(column).map((option) => (
                       <option key={option} value={option}>
                         {option}
                       </option>
@@ -2327,7 +2661,8 @@ function KanbanRowEditorModal({ row, columns, onClose, onDelete, onSave }) {
                   </select>
                 ) : (
                   <input
-                    type={column.type === 'date' ? 'date' : column.type === 'number' ? 'number' : 'text'}
+                    type={column.type === 'date' ? 'date' : column.type === 'number' || column.type === 'currency' ? 'number' : 'text'}
+                    step={column.type === 'currency' ? '0.01' : column.type === 'number' ? '1' : undefined}
                     value={draft[column.key] ?? ''}
                     onChange={(event) =>
                       setDraft((current) => ({
@@ -2375,25 +2710,62 @@ function KanbanRowEditorModal({ row, columns, onClose, onDelete, onSave }) {
 
 function BoardLoadingState() {
   return (
-    <div className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-soft">
-      <div className="h-7 w-1/3 animate-pulse rounded bg-slate-100" />
-      <div className="h-40 animate-pulse rounded bg-slate-100" />
-      <div className="h-40 animate-pulse rounded bg-slate-100" />
+    <div
+      className="space-y-3 rounded-xl border p-4 shadow-soft"
+      style={{
+        borderColor: 'color-mix(in srgb, var(--pulse-accent) 24%, white)',
+        backgroundColor: 'var(--surface-elevated)',
+      }}
+    >
+      <div
+        className="h-7 w-1/3 animate-pulse rounded"
+        style={{ backgroundColor: 'color-mix(in srgb, var(--pulse-accent-soft) 60%, white)' }}
+      />
+      <div
+        className="h-40 animate-pulse rounded"
+        style={{ backgroundColor: 'color-mix(in srgb, var(--pulse-accent-soft) 70%, white)' }}
+      />
+      <div
+        className="h-40 animate-pulse rounded"
+        style={{ backgroundColor: 'color-mix(in srgb, var(--pulse-accent-soft) 70%, white)' }}
+      />
     </div>
   )
 }
 
 function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange }) {
+  const [draftValue, setDraftValue] = useState(value ?? getDefaultValue(column.type, column))
+
+  useEffect(() => {
+    setDraftValue(value ?? getDefaultValue(column.type, column))
+  }, [column, value])
+
+  function commitValue(nextValue = draftValue) {
+    onChange(rowId, column.key, nextValue)
+    onBlur()
+  }
+
   if (column.type === 'status') {
     return (
       <select
         autoFocus
         className={`w-full rounded-md border border-slate-300 bg-white outline-none ring-sky-200 transition focus:ring ${textSizeClasses.input}`}
-        value={value}
+        value={draftValue}
         onBlur={onBlur}
-        onChange={(event) => onChange(rowId, column.key, event.target.value)}
+        onChange={(event) => setDraftValue(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            commitValue(draftValue)
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setDraftValue(value ?? getDefaultValue(column.type, column))
+            onBlur()
+          }
+        }}
       >
-        {statusOptions.map((option) => (
+        {getStatusOptionsForColumn(column).map((option) => (
           <option key={option} value={option}>
             {option}
           </option>
@@ -2407,9 +2779,20 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
       <select
         autoFocus
         className={`w-full rounded-md border border-slate-300 bg-white outline-none ring-sky-200 transition focus:ring ${textSizeClasses.input}`}
-        value={String(value)}
+        value={String(draftValue)}
         onBlur={onBlur}
-        onChange={(event) => onChange(rowId, column.key, event.target.value === 'true')}
+        onChange={(event) => setDraftValue(event.target.value === 'true')}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            commitValue(draftValue)
+          }
+          if (event.key === 'Escape') {
+            event.preventDefault()
+            setDraftValue(value ?? getDefaultValue(column.type, column))
+            onBlur()
+          }
+        }}
       >
         <option value="true">Yes</option>
         <option value="false">No</option>
@@ -2420,13 +2803,26 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
   return (
     <input
       autoFocus
-      type={column.type === 'date' ? 'date' : column.type === 'number' ? 'number' : 'text'}
-      value={value}
+      type={column.type === 'date' ? 'date' : column.type === 'number' || column.type === 'currency' ? 'number' : 'text'}
+      step={column.type === 'currency' ? '0.01' : column.type === 'number' ? '1' : undefined}
+      value={draftValue}
       className={`w-full rounded-md border border-slate-300 bg-white outline-none ring-sky-200 transition focus:ring ${textSizeClasses.input}`}
       onBlur={onBlur}
       onChange={(event) => {
-        const nextValue = column.type === 'number' ? Number(event.target.value || 0) : event.target.value
-        onChange(rowId, column.key, nextValue)
+        const nextValue =
+          column.type === 'number' || column.type === 'currency' ? Number(event.target.value || 0) : event.target.value
+        setDraftValue(nextValue)
+      }}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          commitValue(draftValue)
+        }
+        if (event.key === 'Escape') {
+          event.preventDefault()
+          setDraftValue(value ?? getDefaultValue(column.type, column))
+          onBlur()
+        }
       }}
     />
   )
@@ -2434,6 +2830,7 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
 
 function ReadOnlyCell({ column, value, textSize = 'medium' }) {
   const textClass = textSize === 'large' ? 'text-base' : textSize === 'small' ? 'text-xs' : 'text-sm'
+  const wrappedTextClass = `block line-clamp-2 whitespace-normal break-words leading-snug ${textClass}`
   const ownerBadgeClass =
     textSize === 'large'
       ? 'h-8 w-8 text-xs'
@@ -2447,7 +2844,7 @@ function ReadOnlyCell({ column, value, textSize = 'medium' }) {
         className={`inline-flex rounded-full px-2.5 py-1 font-medium ${
           textSize === 'large' ? 'text-sm' : 'text-xs'
         } ${
-          statusColors[value] || 'bg-slate-100 text-slate-700'
+          getStatusTone(value)
         }`}
       >
         {value}
@@ -2461,7 +2858,7 @@ function ReadOnlyCell({ column, value, textSize = 'medium' }) {
         <span className={`inline-flex items-center justify-center rounded-full bg-slate-200 font-semibold text-slate-700 ${ownerBadgeClass}`}>
           {getInitials(value || 'NA')}
         </span>
-        <span className={`text-slate-700 ${textClass}`}>{value || 'Unassigned'}</span>
+        <span className={`text-slate-700 ${wrappedTextClass}`}>{value || 'Unassigned'}</span>
       </div>
     )
   }
@@ -2480,7 +2877,7 @@ function ReadOnlyCell({ column, value, textSize = 'medium' }) {
     )
   }
 
-  if (column.type === 'location') {
+  if (column.type === 'location' || column.type === 'address') {
     if (!value) return <span className={`text-slate-700 ${textClass}`}>—</span>
 
     return (
@@ -2488,14 +2885,14 @@ function ReadOnlyCell({ column, value, textSize = 'medium' }) {
         href={getMapsUrl(value)}
         target="_blank"
         rel="noreferrer"
-        className={`font-medium text-sky-700 underline decoration-sky-300 underline-offset-2 transition hover:text-sky-900 ${textClass}`}
+        className={`font-medium text-sky-700 underline decoration-sky-300 underline-offset-2 transition hover:text-sky-900 ${wrappedTextClass}`}
       >
         {value}
       </a>
     )
   }
 
-  return <span className={`text-slate-700 ${textClass}`}>{formatColumnValue(value, column.type)}</span>
+  return <span className={`text-slate-700 ${wrappedTextClass}`}>{formatColumnValue(value, column.type)}</span>
 }
 
 export default BoardTable
