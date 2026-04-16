@@ -1,13 +1,53 @@
-import { AlertTriangle, CheckCheck, ChevronDown, ChevronUp, FilterX, Pencil, Plus, Trash2 } from 'lucide-react'
+import { AlertTriangle, ArrowDownAZ, ArrowUpAZ, CheckCheck, ChevronDown, ChevronUp, FilterX, GripVertical, Palette, Pencil, Plus, Trash2 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { statusColors, statusOptions } from '../data/boardMock'
 
-const columnTypeOptions = ['text', 'number', 'currency', 'date', 'status', 'boolean', 'location', 'address', 'phone']
+const columnTypeOptions = ['text', 'number', 'currency', 'date', 'status', 'boolean', 'location', 'address', 'phone', 'tracking', 'updates']
 const textSizeOptions = ['small', 'medium', 'large']
 const COLUMN_MIN_WIDTH = 72
 const COLUMN_MENU_WIDTH = 272
 const VIEWPORT_MENU_PADDING = 12
 const COLUMN_MENU_MAX_HEIGHT = 420
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const conditionalOperatorOptions = [
+  { value: 'equals', label: 'Is equal to' },
+  { value: 'not_equals', label: 'Is not equal to' },
+  { value: 'contains', label: 'Contains' },
+  { value: 'not_contains', label: 'Does not contain' },
+  { value: 'starts_with', label: 'Starts with' },
+  { value: 'ends_with', label: 'Ends with' },
+  { value: 'greater_than', label: 'Greater than' },
+  { value: 'greater_or_equal', label: 'Greater than or equal' },
+  { value: 'less_than', label: 'Less than' },
+  { value: 'less_or_equal', label: 'Less than or equal' },
+  { value: 'between', label: 'Between' },
+  { value: 'is_empty', label: 'Is empty' },
+  { value: 'is_not_empty', label: 'Is not empty' },
+]
+const conditionalTextColorOptions = [
+  { value: '', label: 'Default' },
+  { value: 'text-slate-900', label: 'Slate' },
+  { value: 'text-rose-700', label: 'Rose' },
+  { value: 'text-amber-700', label: 'Amber' },
+  { value: 'text-emerald-700', label: 'Emerald' },
+  { value: 'text-sky-700', label: 'Sky' },
+  { value: 'text-violet-700', label: 'Violet' },
+]
+const conditionalBackgroundOptions = [
+  { value: '', label: 'None' },
+  { value: 'bg-slate-100', label: 'Slate' },
+  { value: 'bg-rose-50', label: 'Rose' },
+  { value: 'bg-amber-50', label: 'Amber' },
+  { value: 'bg-emerald-50', label: 'Emerald' },
+  { value: 'bg-sky-50', label: 'Sky' },
+  { value: 'bg-violet-50', label: 'Violet' },
+]
+const conditionalFontFamilyOptions = [
+  { value: '', label: 'Default' },
+  { value: 'font-sans', label: 'Sans' },
+  { value: 'font-serif', label: 'Serif' },
+  { value: 'font-mono', label: 'Mono' },
+]
 const statusToneClasses = [
   'bg-amber-100 text-amber-700',
   'bg-rose-100 text-rose-700',
@@ -15,6 +55,14 @@ const statusToneClasses = [
   'bg-sky-100 text-sky-700',
   'bg-violet-100 text-violet-700',
   'bg-slate-200 text-slate-700',
+]
+const statusColorOptions = [
+  { id: 'amber', label: 'Amber', className: 'bg-amber-100 text-amber-700' },
+  { id: 'rose', label: 'Rose', className: 'bg-rose-100 text-rose-700' },
+  { id: 'emerald', label: 'Emerald', className: 'bg-emerald-100 text-emerald-700' },
+  { id: 'sky', label: 'Sky', className: 'bg-sky-100 text-sky-700' },
+  { id: 'violet', label: 'Violet', className: 'bg-violet-100 text-violet-700' },
+  { id: 'slate', label: 'Slate', className: 'bg-slate-200 text-slate-700' },
 ]
 
 function getTextSizeClasses(textSize) {
@@ -115,6 +163,7 @@ function getDefaultValue(type, column = null) {
   if (type === 'currency') return 0
   if (type === 'boolean') return false
   if (type === 'status') return getStatusOptionsForColumn(column)[0] || ''
+  if (type === 'updates') return ''
   return ''
 }
 
@@ -124,6 +173,14 @@ function normalizeInputValue(type, value) {
   if (type === 'boolean') return value === true || value === 'true'
   if (type === 'phone') return formatPhoneNumber(value)
   return value
+}
+
+function createConditionalRuleId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `rule-${crypto.randomUUID()}`
+  }
+
+  return `rule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
 function formatCurrencyValue(value) {
@@ -146,10 +203,38 @@ function formatPhoneNumber(value) {
   return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
 }
 
+function parseDateValue(value) {
+  if (value == null || value === '') return null
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value
+  }
+
+  const normalizedValue = typeof value === 'string' ? value.trim() : value
+
+  if (typeof normalizedValue === 'string' && DATE_ONLY_PATTERN.test(normalizedValue)) {
+    const [year, month, day] = normalizedValue.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
+
+  const date = new Date(normalizedValue)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatLocalDateKey(value) {
+  const date = parseDateValue(value)
+  if (!date) return ''
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function formatShortDate(value) {
   if (!value) return '—'
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
+  const date = parseDateValue(value)
+  if (!date) return value
 
   return new Intl.DateTimeFormat('en-US', {
     month: '2-digit',
@@ -158,11 +243,25 @@ function formatShortDate(value) {
   }).format(date)
 }
 
+function formatDateTimeValue(value) {
+  if (!value) return '—'
+  const date = parseDateValue(value)
+  if (!date) return value
+
+  return new Intl.DateTimeFormat('en-US', {
+    month: '2-digit',
+    day: '2-digit',
+    year: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date)
+}
+
 function getStatusOptionsForColumn(column) {
   return column?.statusOptions?.length ? column.statusOptions : statusOptions
 }
 
-function getStatusTone(value) {
+function getDefaultStatusTone(value) {
   if (statusColors[value]) return statusColors[value]
   const hash = String(value || '')
     .split('')
@@ -170,8 +269,30 @@ function getStatusTone(value) {
   return statusToneClasses[hash % statusToneClasses.length]
 }
 
+function getStatusColorMap(column) {
+  if (!column || typeof column.statusColors !== 'object' || Array.isArray(column.statusColors)) return {}
+  return column.statusColors
+}
+
+function getStatusTone(value, column = null) {
+  const configuredTone = getStatusColorMap(column)[value]
+  if (configuredTone) return configuredTone
+  return getDefaultStatusTone(value)
+}
+
+function buildStatusColorMap(options = [], existingColors = {}) {
+  return options.reduce((accumulator, option) => {
+    accumulator[option] = existingColors[option] || getDefaultStatusTone(option)
+    return accumulator
+  }, {})
+}
+
 function getMapsUrl(value) {
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(String(value || ''))}`
+}
+
+function getGoogleSearchUrl(value) {
+  return `https://www.google.com/search?q=${encodeURIComponent(String(value || ''))}`
 }
 
 function isMapsColumn(column) {
@@ -187,13 +308,190 @@ function isMapsColumn(column) {
   )
 }
 
+function isTrackingColumn(column) {
+  const normalizedKey = String(column?.key || '').toLowerCase()
+  const normalizedLabel = String(column?.label || '').toLowerCase()
+
+  return (
+    column?.type === 'tracking' ||
+    normalizedKey.includes('tracking') ||
+    normalizedKey.includes('tracking-number') ||
+    normalizedLabel.includes('tracking')
+  )
+}
+
+function getColumnLinkUrl(column, value) {
+  if (isMapsColumn(column)) return getMapsUrl(value)
+  if (isTrackingColumn(column)) return getGoogleSearchUrl(value)
+  return ''
+}
+
+function stringifyComparableValue(value, type) {
+  if (value == null) return ''
+  if (type === 'boolean') return value ? 'true' : 'false'
+  return String(value).trim()
+}
+
+function getComparableValue(value, column) {
+  if (value == null || value === '') return null
+
+  if (column?.type === 'number' || column?.type === 'currency') {
+    const parsed = Number(value)
+    return Number.isNaN(parsed) ? null : parsed
+  }
+
+  if (column?.type === 'date' || column?.type === 'updates') {
+    const parsedDate = parseDateValue(value)
+    return parsedDate ? parsedDate.getTime() : null
+  }
+
+  if (column?.type === 'boolean') {
+    return value === true || value === 'true'
+  }
+
+  return stringifyComparableValue(value, column?.type).toLowerCase()
+}
+
+function matchesConditionalRule(rule, column, value) {
+  if (!rule || rule.columnKey !== column?.key) return false
+
+  const operator = rule.operator || 'equals'
+  if (operator === 'is_empty') return value == null || value === ''
+  if (operator === 'is_not_empty') return value != null && value !== ''
+
+  const comparableValue = getComparableValue(value, column)
+  if (comparableValue == null) return false
+
+  const primaryValue = getComparableValue(rule.value, column)
+  const secondaryValue = getComparableValue(rule.secondaryValue, column)
+
+  switch (operator) {
+    case 'equals':
+      return comparableValue === primaryValue
+    case 'not_equals':
+      return comparableValue !== primaryValue
+    case 'contains':
+      return String(comparableValue).includes(String(primaryValue ?? '').toLowerCase())
+    case 'not_contains':
+      return !String(comparableValue).includes(String(primaryValue ?? '').toLowerCase())
+    case 'starts_with':
+      return String(comparableValue).startsWith(String(primaryValue ?? '').toLowerCase())
+    case 'ends_with':
+      return String(comparableValue).endsWith(String(primaryValue ?? '').toLowerCase())
+    case 'greater_than':
+      return comparableValue > primaryValue
+    case 'greater_or_equal':
+      return comparableValue >= primaryValue
+    case 'less_than':
+      return comparableValue < primaryValue
+    case 'less_or_equal':
+      return comparableValue <= primaryValue
+    case 'between':
+      return primaryValue != null && secondaryValue != null && comparableValue >= primaryValue && comparableValue <= secondaryValue
+    default:
+      return false
+  }
+}
+
+function getConditionalFormattingClassName(rules, column, value) {
+  const matchedRules = (rules || []).filter((rule) => matchesConditionalRule(rule, column, value))
+
+  return matchedRules
+    .flatMap((rule) => [
+      rule.backgroundColor || '',
+      rule.textColor || '',
+      rule.bold ? 'font-semibold' : '',
+      rule.fontFamily || '',
+    ])
+    .filter(Boolean)
+    .join(' ')
+}
+
 function formatColumnValue(value, type) {
   if (type === 'boolean') return value ? 'Yes' : 'No'
   if (type === 'date') return formatShortDate(value)
+  if (type === 'updates') return formatDateTimeValue(value)
   if (type === 'number') return value === '' ? '0' : value
   if (type === 'currency') return formatCurrencyValue(value)
   if (type === 'phone') return formatPhoneNumber(value) || '—'
   return value || '—'
+}
+
+function getTrackedColumns(columns = []) {
+  return columns.filter((column) => column.type !== 'updates')
+}
+
+function getUpdateColumns(columns = []) {
+  return columns.filter((column) => column.type === 'updates')
+}
+
+function isSameCellValue(previousValue, nextValue) {
+  return JSON.stringify(previousValue ?? '') === JSON.stringify(nextValue ?? '')
+}
+
+function createRowUpdateEntry(changes) {
+  return {
+    id: createConditionalRuleId(),
+    editedAt: new Date().toISOString(),
+    changes,
+  }
+}
+
+function applyRowUpdateHistory(previousRows, nextRows, columns) {
+  const updateColumns = getUpdateColumns(columns)
+  if (updateColumns.length === 0) return nextRows
+
+  const trackedColumns = getTrackedColumns(columns)
+  const previousRowsById = new Map(previousRows.map((row) => [row.id, row]))
+
+  return nextRows.map((row) => {
+    const previousRow = previousRowsById.get(row.id)
+    const previousHistory = Array.isArray(row.__pulseUpdates)
+      ? row.__pulseUpdates
+      : Array.isArray(previousRow?.__pulseUpdates)
+        ? previousRow.__pulseUpdates
+        : []
+
+    if (!previousRow) {
+      const nextTimestamp = previousHistory[0]?.editedAt || ''
+      return updateColumns.reduce(
+        (accumulator, column) => ({
+          ...accumulator,
+          [column.key]: nextTimestamp,
+        }),
+        {
+          ...row,
+          __pulseUpdates: previousHistory,
+        },
+      )
+    }
+
+    const changes = trackedColumns
+      .filter((column) => !isSameCellValue(previousRow[column.key], row[column.key]))
+      .map((column) => ({
+        columnKey: column.key,
+        columnLabel: column.label,
+        previousValue: previousRow[column.key] ?? '',
+        nextValue: row[column.key] ?? '',
+      }))
+
+    const nextHistory = changes.length
+      ? [createRowUpdateEntry(changes), ...previousHistory].slice(0, 25)
+      : previousHistory
+
+    const nextTimestamp = nextHistory[0]?.editedAt || ''
+
+    return updateColumns.reduce(
+      (accumulator, column) => ({
+        ...accumulator,
+        [column.key]: nextTimestamp,
+      }),
+      {
+        ...row,
+        __pulseUpdates: nextHistory,
+      },
+    )
+  })
 }
 
 function getFilterOption(value, type) {
@@ -218,29 +516,50 @@ function getFilterOption(value, type) {
   }
 }
 
+function groupRowsByKey(rows, groupKey) {
+  if (!groupKey) return []
+
+  const groups = rows.reduce((accumulator, row) => {
+    const label = String(row[groupKey] || 'Uncategorized')
+    if (!accumulator[label]) accumulator[label] = []
+    accumulator[label].push(row)
+    return accumulator
+  }, {})
+
+  return Object.entries(groups).map(([label, items]) => ({ label, items }))
+}
+
+function getValidDate(value) {
+  return parseDateValue(value)
+}
+
 function formatDateInputValue(value) {
-  return new Date(value).toISOString().slice(0, 10)
+  return formatLocalDateKey(value)
 }
 
 function createUtcDate(value) {
-  const date = new Date(value)
+  const date = getValidDate(value)
+  if (!date) return new Date(NaN)
   return new Date(Date.UTC(date.getFullYear(), date.getMonth(), date.getDate()))
 }
 
 function addUtcDays(value, amount) {
-  const date = new Date(value)
+  const date = getValidDate(value)
+  if (!date) return new Date(NaN)
   date.setUTCDate(date.getUTCDate() + amount)
   return date
 }
 
 function addUtcMonths(value, amount) {
-  const date = new Date(value)
+  const date = getValidDate(value)
+  if (!date) return new Date(NaN)
   date.setUTCMonth(date.getUTCMonth() + amount)
   return date
 }
 
 function startOfUtcWeek(value) {
-  const date = new Date(value)
+  const date = getValidDate(value)
+  if (!date) return new Date(NaN)
   const day = date.getUTCDay()
   const diff = day === 0 ? -6 : 1 - day
   date.setUTCDate(date.getUTCDate() + diff)
@@ -348,9 +667,13 @@ function BoardTable({
   error = null,
   onRetry,
   readOnly = false,
+  canManageColumns = !readOnly,
   initialViewMode = 'table',
   initialGroupByKey = '',
+  initialSecondaryGroupByKey = '',
+  initialSortConfig = null,
   initialGroupedSectionCollapsedByField = {},
+  initialGroupedSectionOrderByField = {},
   initialGanttGroupByKey = '',
   initialGanttStartKey = '',
   initialGanttEndKey = '',
@@ -358,7 +681,9 @@ function BoardTable({
   initialKanbanPrimaryField = 'name',
   initialKanbanCardFields = [],
   initialKanbanCollapsedLaneIdsByField = {},
+  initialConditionalFormattingRules = [],
   initialTextSize = 'medium',
+  clearFiltersToken = 0,
   onDataChange,
   onViewConfigChange,
 }) {
@@ -374,15 +699,23 @@ function BoardTable({
   const [filters, setFilters] = useState([])
   const [columnFilterSearch, setColumnFilterSearch] = useState({})
   const [statusDraftByColumn, setStatusDraftByColumn] = useState({})
+  const [statusManagerColumnKey, setStatusManagerColumnKey] = useState(null)
+  const [rowUpdateDetails, setRowUpdateDetails] = useState(null)
   const [viewMode, setViewMode] = useState(initialViewMode)
   const [kanbanEditorRowId, setKanbanEditorRowId] = useState(null)
   const [draggingId, setDraggingId] = useState(null)
   const [draggingColumnKey, setDraggingColumnKey] = useState(null)
+  const [draggingGroupLabel, setDraggingGroupLabel] = useState(null)
   const [groupByKey, setGroupByKey] = useState(initialGroupByKey || columns.find((column) => column.key === 'category')?.key || '')
+  const [secondaryGroupByKey, setSecondaryGroupByKey] = useState(initialSecondaryGroupByKey)
+  const [sortConfig, setSortConfig] = useState(initialSortConfig)
   const [groupedSectionCollapsedByField, setGroupedSectionCollapsedByField] = useState(initialGroupedSectionCollapsedByField)
+  const [groupedSectionOrderByField, setGroupedSectionOrderByField] = useState(initialGroupedSectionOrderByField)
   const [openKanbanConfig, setOpenKanbanConfig] = useState(false)
   const [openGanttConfig, setOpenGanttConfig] = useState(false)
   const [openColumnVisibility, setOpenColumnVisibility] = useState(false)
+  const [openConditionalFormatting, setOpenConditionalFormatting] = useState(false)
+  const [conditionalFormattingRules, setConditionalFormattingRules] = useState(initialConditionalFormattingRules)
   const [textSize, setTextSize] = useState(initialTextSize)
   const [ganttGroupByKey, setGanttGroupByKey] = useState(initialGanttGroupByKey)
   const [ganttStartKey, setGanttStartKey] = useState(initialGanttStartKey)
@@ -419,12 +752,53 @@ function BoardTable({
   }, [columns, initialGroupByKey])
 
   useEffect(() => {
+    setSecondaryGroupByKey((current) => {
+      const nextKey = initialSecondaryGroupByKey || ''
+      if (nextKey === groupByKey) return ''
+      if (nextKey && !columns.some((column) => column.key === nextKey)) return ''
+      if (current === nextKey) return current
+      return nextKey
+    })
+  }, [columns, groupByKey, initialSecondaryGroupByKey])
+
+  useEffect(() => {
+    setSortConfig((current) => {
+      const nextConfig = initialSortConfig || null
+      if (!nextConfig?.columnKey) return null
+      if (!columns.some((column) => column.key === nextConfig.columnKey)) return null
+      if (
+        current?.columnKey === nextConfig.columnKey &&
+        current?.direction === nextConfig.direction
+      ) {
+        return current
+      }
+      return nextConfig
+    })
+  }, [columns, initialSortConfig])
+
+  useEffect(() => {
     setGroupedSectionCollapsedByField(initialGroupedSectionCollapsedByField)
   }, [initialGroupedSectionCollapsedByField])
 
   useEffect(() => {
+    setGroupedSectionOrderByField(initialGroupedSectionOrderByField)
+  }, [initialGroupedSectionOrderByField])
+
+  useEffect(() => {
     setKanbanCollapsedLaneIdsByField(initialKanbanCollapsedLaneIdsByField)
   }, [initialKanbanCollapsedLaneIdsByField])
+
+  useEffect(() => {
+    setConditionalFormattingRules(initialConditionalFormattingRules)
+  }, [initialConditionalFormattingRules])
+
+  useEffect(() => {
+    if (!clearFiltersToken) return
+    setFilters([])
+    setColumnFilterSearch({})
+    setOpenColumnMenu(null)
+    setColumnMenuStyle(null)
+  }, [clearFiltersToken])
 
   useEffect(() => {
     setKanbanGroupKey(initialKanbanGroupKey || columns.find((column) => column.key === 'status')?.key || '')
@@ -508,8 +882,8 @@ function BoardTable({
       }
     }
 
-    document.addEventListener('mousedown', handlePointerDown)
-    return () => document.removeEventListener('mousedown', handlePointerDown)
+    document.addEventListener('pointerdown', handlePointerDown)
+    return () => document.removeEventListener('pointerdown', handlePointerDown)
   }, [openColumnMenu, openColumnVisibility, openKanbanConfig, openGanttConfig, showAddColumnForm])
 
   useEffect(() => {
@@ -540,6 +914,28 @@ function BoardTable({
     window.addEventListener('keydown', handleEscape)
     return () => window.removeEventListener('keydown', handleEscape)
   }, [pendingColumnDelete])
+
+  useEffect(() => {
+    if (!statusManagerColumnKey) return
+
+    const targetColumn = boardColumns.find((column) => column.key === statusManagerColumnKey)
+    if (!targetColumn || targetColumn.type !== 'status') {
+      setStatusManagerColumnKey(null)
+    }
+  }, [boardColumns, statusManagerColumnKey])
+
+  useEffect(() => {
+    if (!statusManagerColumnKey) return
+
+    function handleEscape(event) {
+      if (event.key === 'Escape') {
+        setStatusManagerColumnKey(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleEscape)
+    return () => window.removeEventListener('keydown', handleEscape)
+  }, [statusManagerColumnKey])
 
   const nextItemNumber = useMemo(() => boardRows.length + 1, [boardRows.length])
   const visibleColumns = useMemo(
@@ -575,6 +971,43 @@ function BoardTable({
       }),
     )
   }, [boardColumns, boardRows, filters])
+  const sortedRows = useMemo(() => {
+    if (!sortConfig?.columnKey || !sortConfig?.direction) return filteredRows
+
+    const targetColumn = boardColumns.find((column) => column.key === sortConfig.columnKey)
+    if (!targetColumn) return filteredRows
+
+    const directionMultiplier = sortConfig.direction === 'desc' ? -1 : 1
+
+    return [...filteredRows].sort((leftRow, rightRow) => {
+      const leftValue = leftRow[sortConfig.columnKey]
+      const rightValue = rightRow[sortConfig.columnKey]
+
+      const leftComparable = getComparableValue(leftValue, targetColumn)
+      const rightComparable = getComparableValue(rightValue, targetColumn)
+
+      const leftEmpty = leftComparable == null || leftComparable === ''
+      const rightEmpty = rightComparable == null || rightComparable === ''
+
+      if (leftEmpty && rightEmpty) return 0
+      if (leftEmpty) return 1
+      if (rightEmpty) return -1
+
+      if (typeof leftComparable === 'number' && typeof rightComparable === 'number') {
+        return (leftComparable - rightComparable) * directionMultiplier
+      }
+
+      if (typeof leftComparable === 'boolean' && typeof rightComparable === 'boolean') {
+        if (leftComparable === rightComparable) return 0
+        return (leftComparable ? 1 : -1) * directionMultiplier
+      }
+
+      return String(leftComparable).localeCompare(String(rightComparable), undefined, {
+        numeric: true,
+        sensitivity: 'base',
+      }) * directionMultiplier
+    })
+  }, [boardColumns, filteredRows, sortConfig])
   const filterOptionsByColumn = useMemo(
     () =>
       boardColumns.reduce((accumulator, column) => {
@@ -597,6 +1030,10 @@ function BoardTable({
   )
 
   const kanbanOptions = useMemo(
+    () => boardColumns.filter((column) => column.type === 'text' || column.type === 'status' || column.type === 'boolean'),
+    [boardColumns],
+  )
+  const tableGroupingOptions = useMemo(
     () => boardColumns.filter((column) => column.type === 'text' || column.type === 'status' || column.type === 'boolean'),
     [boardColumns],
   )
@@ -671,22 +1108,37 @@ function BoardTable({
   }, [filteredRows, kanbanColumn, kanbanLaneDefinitions])
   const groupedRows = useMemo(() => {
     if (!groupByKey) return []
+    const nextGroups = groupRowsByKey(sortedRows, groupByKey).map((group) => ({
+      ...group,
+      children:
+        secondaryGroupByKey && secondaryGroupByKey !== groupByKey
+          ? groupRowsByKey(group.items, secondaryGroupByKey)
+          : [],
+    }))
+    const preferredOrder = groupedSectionOrderByField[groupByKey] || []
+    const orderIndex = new Map(preferredOrder.map((label, index) => [label, index]))
 
-    const groups = filteredRows.reduce((accumulator, row) => {
-      const label = String(row[groupByKey] || 'Uncategorized')
-      if (!accumulator[label]) accumulator[label] = []
-      accumulator[label].push(row)
-      return accumulator
-    }, {})
-
-    return Object.entries(groups).map(([label, items]) => ({ label, items }))
-  }, [filteredRows, groupByKey])
+    return nextGroups.sort((left, right) => {
+      const leftIndex = orderIndex.has(left.label) ? orderIndex.get(left.label) : Number.MAX_SAFE_INTEGER
+      const rightIndex = orderIndex.has(right.label) ? orderIndex.get(right.label) : Number.MAX_SAFE_INTEGER
+      if (leftIndex !== rightIndex) return leftIndex - rightIndex
+      return 0
+    })
+  }, [groupByKey, groupedSectionOrderByField, secondaryGroupByKey, sortedRows])
+  const allGroupLabels = useMemo(
+    () => (groupByKey ? groupRowsByKey(boardRows, groupByKey).map((group) => group.label) : []),
+    [boardRows, groupByKey],
+  )
   const textSizeClasses = useMemo(() => getTextSizeClasses(textSize), [textSize])
   const kanbanTextSizeClasses = useMemo(() => getKanbanTextSizeClasses(textSize), [textSize])
   const visibleRowIds = useMemo(() => new Set(boardRows.map((row) => row.id)), [boardRows])
   const collapsedGroupLabels = useMemo(
     () => groupedSectionCollapsedByField[groupByKey] || [],
     [groupByKey, groupedSectionCollapsedByField],
+  )
+  const groupedSectionOrder = useMemo(
+    () => groupedSectionOrderByField[groupByKey] || [],
+    [groupByKey, groupedSectionOrderByField],
   )
   const collapsedKanbanLaneIds = useMemo(
     () => kanbanCollapsedLaneIdsByField[kanbanGroupKey] || [],
@@ -698,10 +1150,10 @@ function BoardTable({
   )
   const persistViewConfig = useCallback(
     (updates) => {
-      if (readOnly || !onViewConfigChange) return
+      if (!onViewConfigChange) return
       onViewConfigChange(updates)
     },
-    [onViewConfigChange, readOnly],
+    [onViewConfigChange],
   )
 
   useEffect(() => {
@@ -716,7 +1168,7 @@ function BoardTable({
   useEffect(() => {
     if (!groupByKey) return
 
-    const validLabels = new Set(groupedRows.map((group) => group.label))
+    const validLabels = new Set(allGroupLabels)
     const currentCollapsed = groupedSectionCollapsedByField[groupByKey] || []
     const nextCollapsed = currentCollapsed.filter((label) => validLabels.has(label))
 
@@ -732,7 +1184,36 @@ function BoardTable({
 
       return nextValue
     })
-  }, [groupByKey, groupedRows, groupedSectionCollapsedByField, persistViewConfig])
+  }, [allGroupLabels, groupByKey, groupedSectionCollapsedByField, persistViewConfig])
+
+  useEffect(() => {
+    if (!groupByKey) return
+
+    const validLabels = new Set(allGroupLabels)
+    const currentOrder = groupedSectionOrderByField[groupByKey] || []
+    const nextOrder = [
+      ...currentOrder.filter((label) => validLabels.has(label)),
+      ...allGroupLabels.filter((label) => !currentOrder.includes(label)),
+    ]
+
+    if (
+      nextOrder.length === currentOrder.length &&
+      nextOrder.every((label, index) => label === currentOrder[index])
+    ) {
+      return
+    }
+
+    setGroupedSectionOrderByField((current) => {
+      const nextValue = {
+        ...current,
+        [groupByKey]: nextOrder,
+      }
+
+      persistViewConfig({ groupedSectionOrderByField: nextValue })
+
+      return nextValue
+    })
+  }, [allGroupLabels, groupByKey, groupedSectionOrderByField, persistViewConfig])
 
   useEffect(() => {
     if (!kanbanGroupKey) return
@@ -765,7 +1246,11 @@ function BoardTable({
 
   const updateCell = useCallback((rowId, columnKey, value) => {
     setBoardRows((currentRows) => {
-      const nextRows = currentRows.map((row) => (row.id === rowId ? { ...row, [columnKey]: value } : row))
+      const nextRows = applyRowUpdateHistory(
+        currentRows,
+        currentRows.map((row) => (row.id === rowId ? { ...row, [columnKey]: value } : row)),
+        boardColumns,
+      )
       pushBoardChange(boardColumns, nextRows)
       return nextRows
     })
@@ -774,7 +1259,11 @@ function BoardTable({
   const updateRowValues = useCallback(
     (rowId, updates) => {
       setBoardRows((currentRows) => {
-        const nextRows = currentRows.map((row) => (row.id === rowId ? { ...row, ...updates } : row))
+        const nextRows = applyRowUpdateHistory(
+          currentRows,
+          currentRows.map((row) => (row.id === rowId ? { ...row, ...updates } : row)),
+          boardColumns,
+        )
         pushBoardChange(boardColumns, nextRows)
         return nextRows
       })
@@ -875,6 +1364,8 @@ function BoardTable({
   )
 
   const addColumn = useCallback(() => {
+    if (!canManageColumns) return
+
     const cleanLabel = newColumn.label.trim()
     if (!cleanLabel) return
 
@@ -883,7 +1374,12 @@ function BoardTable({
       key: uniqueKey,
       label: cleanLabel,
       type: newColumn.type,
-      ...(newColumn.type === 'status' ? { statusOptions: [...statusOptions] } : {}),
+      ...(newColumn.type === 'status'
+        ? {
+            statusOptions: [...statusOptions],
+            statusColors: buildStatusColorMap(statusOptions),
+          }
+        : {}),
       minWidth: 140,
       position: boardColumns.length + 1,
       hidden: false,
@@ -898,7 +1394,7 @@ function BoardTable({
     })
     setNewColumn({ label: '', type: 'text' })
     setShowAddColumnForm(false)
-  }, [boardColumns, newColumn, pushBoardChange])
+  }, [boardColumns, canManageColumns, newColumn, pushBoardChange])
 
   const toggleFilterValue = useCallback((columnKey, valueToken) => {
     setFilters((currentFilters) => {
@@ -963,7 +1459,15 @@ function BoardTable({
           ? {
               ...column,
               type: nextType,
-              ...(nextType === 'status' ? { statusOptions: getStatusOptionsForColumn(column) } : { statusOptions: undefined }),
+              ...(nextType === 'status'
+                ? {
+                    statusOptions: getStatusOptionsForColumn(column),
+                    statusColors: buildStatusColorMap(getStatusOptionsForColumn(column), getStatusColorMap(column)),
+                  }
+                : {
+                    statusOptions: undefined,
+                    statusColors: undefined,
+                  }),
             }
           : column,
       )
@@ -999,6 +1503,8 @@ function BoardTable({
   )
 
   const deleteColumn = useCallback((columnKey) => {
+    if (!canManageColumns) return
+
     const nextColumns = boardColumns.filter((column) => column.key !== columnKey)
     if (columnKey === groupByKey) {
       setGroupByKey('')
@@ -1020,10 +1526,12 @@ function BoardTable({
     })
     setFilters((currentFilters) => currentFilters.filter((filter) => filter.columnKey !== columnKey))
     setOpenColumnMenu(null)
-  }, [boardColumns, groupByKey, kanbanGroupKey, persistViewConfig, pushBoardChange])
+  }, [boardColumns, canManageColumns, groupByKey, kanbanGroupKey, persistViewConfig, pushBoardChange])
 
   const requestColumnDelete = useCallback(
     (columnKey) => {
+      if (!canManageColumns) return
+
       const targetColumn = boardColumns.find((column) => column.key === columnKey)
       setPendingColumnDelete({
         key: columnKey,
@@ -1032,7 +1540,7 @@ function BoardTable({
       setOpenColumnMenu(null)
       setColumnMenuStyle(null)
     },
-    [boardColumns],
+    [boardColumns, canManageColumns],
   )
 
   const addStatusOption = useCallback(
@@ -1045,7 +1553,13 @@ function BoardTable({
 
       const nextOptions = Array.from(new Set([...getStatusOptionsForColumn(targetColumn), nextLabel]))
       const nextColumns = boardColumns.map((column) =>
-        column.key === columnKey ? { ...column, statusOptions: nextOptions } : column,
+        column.key === columnKey
+          ? {
+              ...column,
+              statusOptions: nextOptions,
+              statusColors: buildStatusColorMap(nextOptions, getStatusColorMap(column)),
+            }
+          : column,
       )
       setBoardColumns(nextColumns)
       pushBoardChange(nextColumns, boardRows)
@@ -1065,8 +1579,20 @@ function BoardTable({
       const nextOptions = getStatusOptionsForColumn(targetColumn).map((option) =>
         option === currentLabel ? nextLabel : option,
       )
+      const currentColors = getStatusColorMap(targetColumn)
+      const renamedColors = nextOptions.reduce((accumulator, option, index) => {
+        const previousOption = getStatusOptionsForColumn(targetColumn)[index]
+        accumulator[option] = currentColors[previousOption] || getDefaultStatusTone(option)
+        return accumulator
+      }, {})
       const nextColumns = boardColumns.map((column) =>
-        column.key === columnKey ? { ...column, statusOptions: Array.from(new Set(nextOptions)) } : column,
+        column.key === columnKey
+          ? {
+              ...column,
+              statusOptions: Array.from(new Set(nextOptions)),
+              statusColors: buildStatusColorMap(Array.from(new Set(nextOptions)), renamedColors),
+            }
+          : column,
       )
       const nextRows = boardRows.map((row) =>
         row[columnKey] === currentLabel ? { ...row, [columnKey]: nextLabel } : row,
@@ -1092,7 +1618,13 @@ function BoardTable({
       const nextOptions = currentOptions.filter((option) => option !== optionLabel)
       const fallbackValue = nextOptions[0] || ''
       const nextColumns = boardColumns.map((column) =>
-        column.key === columnKey ? { ...column, statusOptions: nextOptions } : column,
+        column.key === columnKey
+          ? {
+              ...column,
+              statusOptions: nextOptions,
+              statusColors: buildStatusColorMap(nextOptions, getStatusColorMap(column)),
+            }
+          : column,
       )
       const nextRows = boardRows.map((row) =>
         row[columnKey] === optionLabel ? { ...row, [columnKey]: fallbackValue } : row,
@@ -1100,6 +1632,28 @@ function BoardTable({
       setBoardColumns(nextColumns)
       setBoardRows(nextRows)
       pushBoardChange(nextColumns, nextRows)
+    },
+    [boardColumns, boardRows, pushBoardChange],
+  )
+
+  const updateStatusColor = useCallback(
+    (columnKey, optionLabel, colorClassName) => {
+      const targetColumn = boardColumns.find((column) => column.key === columnKey)
+      if (!targetColumn || targetColumn.type !== 'status') return
+
+      const nextColumns = boardColumns.map((column) =>
+        column.key === columnKey
+          ? {
+              ...column,
+              statusColors: {
+                ...getStatusColorMap(column),
+                [optionLabel]: colorClassName,
+              },
+            }
+          : column,
+      )
+      setBoardColumns(nextColumns)
+      pushBoardChange(nextColumns, boardRows)
     },
     [boardColumns, boardRows, pushBoardChange],
   )
@@ -1157,13 +1711,17 @@ function BoardTable({
       if (!kanbanColumn || !draggingId || readOnly) return
 
       setBoardRows((currentRows) => {
-        const nextRows = currentRows.map((row) =>
-          row.id === draggingId
-            ? {
-                ...row,
-                [kanbanColumn.key]: kanbanColumn.type === 'boolean' ? laneValue === true : laneValue,
-              }
-            : row,
+        const nextRows = applyRowUpdateHistory(
+          currentRows,
+          currentRows.map((row) =>
+            row.id === draggingId
+              ? {
+                  ...row,
+                  [kanbanColumn.key]: kanbanColumn.type === 'boolean' ? laneValue === true : laneValue,
+                }
+              : row,
+          ),
+          boardColumns,
         )
         pushBoardChange(boardColumns, nextRows)
         return nextRows
@@ -1249,9 +1807,69 @@ function BoardTable({
   const handleGroupByChange = useCallback(
     (nextKey) => {
       setGroupByKey(nextKey)
-      persistViewConfig({ groupByKey: nextKey })
+      const nextSecondaryGroupByKey = nextKey && secondaryGroupByKey === nextKey ? '' : secondaryGroupByKey
+      if (nextSecondaryGroupByKey !== secondaryGroupByKey) {
+        setSecondaryGroupByKey('')
+      }
+      persistViewConfig({
+        groupByKey: nextKey,
+        secondaryGroupByKey: nextSecondaryGroupByKey,
+      })
+    },
+    [persistViewConfig, secondaryGroupByKey],
+  )
+
+  const handleSecondaryGroupByChange = useCallback(
+    (nextKey) => {
+      const normalizedKey = nextKey === groupByKey ? '' : nextKey
+      setSecondaryGroupByKey(normalizedKey)
+      persistViewConfig({ secondaryGroupByKey: normalizedKey })
+    },
+    [groupByKey, persistViewConfig],
+  )
+
+  const updateSortPreference = useCallback(
+    (nextSortConfig) => {
+      const normalizedConfig =
+        nextSortConfig?.columnKey && nextSortConfig?.direction
+          ? {
+              columnKey: nextSortConfig.columnKey,
+              direction: nextSortConfig.direction,
+            }
+          : null
+
+      setSortConfig(normalizedConfig)
+      persistViewConfig({ sortConfig: normalizedConfig })
     },
     [persistViewConfig],
+  )
+
+  const reorderGroupedSections = useCallback(
+    (fromLabel, toLabel) => {
+      if (!groupByKey || !fromLabel || !toLabel || fromLabel === toLabel) return
+
+      setGroupedSectionOrderByField((current) => {
+        const currentOrder = current[groupByKey]?.length
+          ? current[groupByKey]
+          : groupedRows.map((group) => group.label)
+        const nextOrder = [...currentOrder]
+        const fromIndex = nextOrder.indexOf(fromLabel)
+        const toIndex = nextOrder.indexOf(toLabel)
+        if (fromIndex === -1 || toIndex === -1) return current
+
+        const [movedLabel] = nextOrder.splice(fromIndex, 1)
+        nextOrder.splice(toIndex, 0, movedLabel)
+
+        const nextValue = {
+          ...current,
+          [groupByKey]: nextOrder,
+        }
+
+        persistViewConfig({ groupedSectionOrderByField: nextValue })
+        return nextValue
+      })
+    },
+    [groupByKey, groupedRows, persistViewConfig],
   )
 
   const toggleGroupedSection = useCallback(
@@ -1291,9 +1909,12 @@ function BoardTable({
       if (kanbanEditorRowId === rowId) {
         setKanbanEditorRowId(null)
       }
+      if (rowUpdateDetails?.rowId === rowId) {
+        setRowUpdateDetails(null)
+      }
       pushBoardChange(boardColumns, nextRows)
     },
-    [activeCell?.rowId, boardColumns, boardRows, kanbanEditorRowId, pushBoardChange],
+    [activeCell?.rowId, boardColumns, boardRows, kanbanEditorRowId, pushBoardChange, rowUpdateDetails?.rowId],
   )
 
   const handleTextSizeChange = useCallback(
@@ -1302,6 +1923,53 @@ function BoardTable({
       persistViewConfig({ textSize: nextSize })
     },
     [persistViewConfig],
+  )
+
+  const updateConditionalFormattingRules = useCallback(
+    (updater) => {
+      setConditionalFormattingRules((current) => {
+        const nextRules = typeof updater === 'function' ? updater(current) : updater
+        persistViewConfig({ conditionalFormattingRules: nextRules })
+        return nextRules
+      })
+    },
+    [persistViewConfig],
+  )
+
+  const addConditionalFormattingRule = useCallback(() => {
+    const fallbackColumnKey = boardColumns[0]?.key || ''
+    if (!fallbackColumnKey) return
+
+    updateConditionalFormattingRules((current) => [
+      ...current,
+      {
+        id: createConditionalRuleId(),
+        columnKey: fallbackColumnKey,
+        operator: 'equals',
+        value: '',
+        secondaryValue: '',
+        textColor: '',
+        backgroundColor: '',
+        fontFamily: '',
+        bold: false,
+      },
+    ])
+  }, [boardColumns, updateConditionalFormattingRules])
+
+  const patchConditionalFormattingRule = useCallback(
+    (ruleId, updates) => {
+      updateConditionalFormattingRules((current) =>
+        current.map((rule) => (rule.id === ruleId ? { ...rule, ...updates } : rule)),
+      )
+    },
+    [updateConditionalFormattingRules],
+  )
+
+  const removeConditionalFormattingRule = useCallback(
+    (ruleId) => {
+      updateConditionalFormattingRules((current) => current.filter((rule) => rule.id !== ruleId))
+    },
+    [updateConditionalFormattingRules],
   )
 
   const isEditing = useCallback(
@@ -1373,8 +2041,7 @@ function BoardTable({
     <div ref={boardContainerRef} className="space-y-4">
       <div className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 shadow-soft lg:flex-row lg:items-end lg:justify-between">
         <div className="flex flex-wrap items-end gap-2">
-          {!readOnly &&
-            (showAddColumnForm ? (
+          {canManageColumns && showAddColumnForm ? (
               <div data-add-column-panel className="flex w-full flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-end">
                 <div className="flex min-w-0 flex-col gap-1">
                   <label className="text-xs font-medium uppercase tracking-wide text-slate-500">Column name</label>
@@ -1421,14 +2088,16 @@ function BoardTable({
               </div>
             ) : (
               <>
-                <button
-                  type="button"
-                  data-add-column-trigger
-                  className="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
-                  onClick={() => setShowAddColumnForm(true)}
-                >
-                  + Add column
-                </button>
+                {canManageColumns && (
+                  <button
+                    type="button"
+                    data-add-column-trigger
+                    className="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
+                    onClick={() => setShowAddColumnForm(true)}
+                  >
+                    + Add column
+                  </button>
+                )}
                 <button
                   type="button"
                   className="inline-flex h-9 items-center rounded-lg border border-slate-300 bg-white px-3 text-sm font-medium text-slate-700 shadow-soft transition hover:-translate-y-0.5 hover:bg-slate-50 active:translate-y-0"
@@ -1437,7 +2106,7 @@ function BoardTable({
                   + Add new row
                 </button>
               </>
-            ))}
+            )}
 
           <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2">
             <label htmlFor="table-text-size" className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
@@ -1459,25 +2128,69 @@ function BoardTable({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {filters.length > 0 && (
+            <button
+              type="button"
+              className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 text-sm font-medium text-rose-700 transition hover:bg-rose-100"
+              onClick={() => setFilters([])}
+            >
+              <FilterX size={14} />
+              Clear filters
+              <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-rose-700">
+                {filters.length}
+              </span>
+            </button>
+          )}
+          <button
+            type="button"
+            className="inline-flex h-9 items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            onClick={() => setOpenConditionalFormatting(true)}
+          >
+            <Palette size={14} />
+            Format rules
+            {conditionalFormattingRules.length > 0 && (
+              <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-600">
+                {conditionalFormattingRules.length}
+              </span>
+            )}
+          </button>
           {viewMode === 'table' && (
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2">
-                <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Group by</span>
+              <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Group by</span>
                 <select
-                  className="bg-transparent text-sm text-slate-700 outline-none"
+                  className="max-w-[8.5rem] bg-transparent text-xs text-slate-700 outline-none"
                   value={groupByKey}
                   onChange={(event) => handleGroupByChange(event.target.value)}
                 >
                   <option value="">None</option>
-                  {boardColumns
-                  .filter((column) => column.type === 'text' || column.type === 'status' || column.type === 'boolean')
-                  .map((column) => (
+                  {tableGroupingOptions.map((column) => (
                     <option key={column.key} value={column.key}>
                       {column.label}
                     </option>
                   ))}
                 </select>
               </div>
+
+              {groupByKey && (
+                <div className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-2.5 py-1.5">
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">Then by</span>
+                  <select
+                    className="max-w-[8.5rem] bg-transparent text-xs text-slate-700 outline-none"
+                    value={secondaryGroupByKey}
+                    onChange={(event) => handleSecondaryGroupByChange(event.target.value)}
+                  >
+                    <option value="">None</option>
+                    {tableGroupingOptions
+                      .filter((column) => column.key !== groupByKey)
+                      .map((column) => (
+                        <option key={column.key} value={column.key}>
+                          {column.label}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+              )}
 
               <div className="relative">
                 <button
@@ -1698,6 +2411,25 @@ function BoardTable({
         </div>
       )}
 
+      {openConditionalFormatting && (
+        <ConditionalFormattingModal
+          columns={boardColumns}
+          rules={conditionalFormattingRules}
+          onAddRule={addConditionalFormattingRule}
+          onClose={() => setOpenConditionalFormatting(false)}
+          onPatchRule={patchConditionalFormattingRule}
+          onRemoveRule={removeConditionalFormattingRule}
+        />
+      )}
+
+      {rowUpdateDetails && (
+        <RowUpdateDetailsModal
+          rowName={rowUpdateDetails.rowName}
+          updates={rowUpdateDetails.updates}
+          onClose={() => setRowUpdateDetails(null)}
+        />
+      )}
+
       <div className="transition-all duration-300">
         {filteredRows.length === 0 ? (
           <EmptyState onClearFilters={() => setFilters([])} />
@@ -1720,11 +2452,7 @@ function BoardTable({
             clearFiltersForColumn={clearFiltersForColumn}
             renameColumn={renameColumn}
             changeColumnType={changeColumnType}
-            addStatusOption={addStatusOption}
-            renameStatusOption={renameStatusOption}
-            deleteStatusOption={deleteStatusOption}
-            statusDraftByColumn={statusDraftByColumn}
-            setStatusDraftByColumn={setStatusDraftByColumn}
+            openStatusManager={setStatusManagerColumnKey}
             requestColumnDelete={requestColumnDelete}
             reorderColumns={reorderColumns}
             resizeColumn={resizeColumn}
@@ -1734,18 +2462,37 @@ function BoardTable({
             updateCell={updateCell}
             deleteRow={deleteRow}
             readOnly={readOnly}
+            canManageColumns={canManageColumns}
             textSize={textSize}
             textSizeClasses={textSizeClasses}
             collapsedGroupLabels={collapsedGroupLabels}
+            groupedSectionOrder={groupedSectionOrder}
+            draggingGroupLabel={draggingGroupLabel}
+            setDraggingGroupLabel={setDraggingGroupLabel}
+            secondaryGroupByKey={secondaryGroupByKey}
+            secondaryGroupByLabel={
+              tableGroupingOptions.find((column) => column.key === secondaryGroupByKey)?.label || ''
+            }
             toggleGroupedSection={toggleGroupedSection}
+            reorderGroupedSections={reorderGroupedSections}
             onAddRowToGroup={addGroupedRow}
+            conditionalFormattingRules={conditionalFormattingRules}
+            sortConfig={sortConfig}
+            onSortColumn={updateSortPreference}
+            onOpenRowUpdates={(row) =>
+              setRowUpdateDetails({
+                rowId: row.id,
+                rowName: row.name || 'Row update',
+                updates: Array.isArray(row.__pulseUpdates) ? row.__pulseUpdates : [],
+              })
+            }
           />
         ) : viewMode === 'table' ? (
           <TableView
             menuScope="table"
             boardColumns={boardColumns}
             visibleColumns={visibleColumns}
-            filteredRows={filteredRows}
+            filteredRows={sortedRows}
             isEditing={isEditing}
             openColumnMenu={openColumnMenu}
             filters={filters}
@@ -1773,8 +2520,19 @@ function BoardTable({
             updateCell={updateCell}
             deleteRow={deleteRow}
             readOnly={readOnly}
+            canManageColumns={canManageColumns}
             textSize={textSize}
             textSizeClasses={textSizeClasses}
+            conditionalFormattingRules={conditionalFormattingRules}
+            sortConfig={sortConfig}
+            onSortColumn={updateSortPreference}
+            onOpenRowUpdates={(row) =>
+              setRowUpdateDetails({
+                rowId: row.id,
+                rowName: row.name || 'Row update',
+                updates: Array.isArray(row.__pulseUpdates) ? row.__pulseUpdates : [],
+              })
+            }
           />
         ) : viewMode === 'kanban' ? (
           <KanbanView
@@ -1798,7 +2556,7 @@ function BoardTable({
           />
         ) : (
           <GanttView
-            rows={filteredRows}
+            rows={sortedRows}
             columns={boardColumns}
             ganttStartKey={ganttStartKey}
             ganttEndKey={ganttEndKey}
@@ -1861,13 +2619,106 @@ function BoardTable({
           </div>
         </div>
       )}
+
+      {statusManagerColumnKey && (
+        <StatusManagerModal
+          column={boardColumns.find((entry) => entry.key === statusManagerColumnKey) || null}
+          statusDraftValue={statusDraftByColumn[statusManagerColumnKey] || ''}
+          setStatusDraftValue={(nextValue) =>
+            setStatusDraftByColumn((current) => ({
+              ...current,
+              [statusManagerColumnKey]: nextValue,
+            }))
+          }
+          onClose={() => setStatusManagerColumnKey(null)}
+          onAddStatus={() => addStatusOption(statusManagerColumnKey)}
+          onRenameStatus={(option) => renameStatusOption(statusManagerColumnKey, option)}
+          onDeleteStatus={(option) => deleteStatusOption(statusManagerColumnKey, option)}
+          onUpdateStatusColor={(option, colorClassName) =>
+            updateStatusColor(statusManagerColumnKey, option, colorClassName)
+          }
+        />
+      )}
+    </div>
+  )
+}
+
+function HorizontalScrollFrame({ children, outerClassName = '', scrollerClassName = '' }) {
+  const topScrollRef = useRef(null)
+  const bodyScrollRef = useRef(null)
+  const syncSourceRef = useRef(null)
+  const [scrollMetrics, setScrollMetrics] = useState({ clientWidth: 0, scrollWidth: 0 })
+
+  useEffect(() => {
+    const bodyElement = bodyScrollRef.current
+    if (!bodyElement) return
+
+    function syncMetrics() {
+      setScrollMetrics({
+        clientWidth: bodyElement.clientWidth,
+        scrollWidth: bodyElement.scrollWidth,
+      })
+    }
+
+    syncMetrics()
+
+    const resizeObserver =
+      typeof ResizeObserver === 'undefined'
+        ? null
+        : new ResizeObserver(() => {
+            syncMetrics()
+          })
+
+    resizeObserver?.observe(bodyElement)
+    if (bodyElement.firstElementChild) {
+      resizeObserver?.observe(bodyElement.firstElementChild)
+    }
+
+    window.addEventListener('resize', syncMetrics)
+
+    return () => {
+      resizeObserver?.disconnect()
+      window.removeEventListener('resize', syncMetrics)
+    }
+  }, [children])
+
+  const showTopScrollbar = scrollMetrics.scrollWidth > scrollMetrics.clientWidth + 1
+
+  function syncScroll(source, targetRef, scrollLeft) {
+    if (!targetRef.current) return
+    if (syncSourceRef.current && syncSourceRef.current !== source) return
+
+    syncSourceRef.current = source
+    targetRef.current.scrollLeft = scrollLeft
+    requestAnimationFrame(() => {
+      syncSourceRef.current = null
+    })
+  }
+
+  return (
+    <div className={outerClassName}>
+      {showTopScrollbar && (
+        <div
+          ref={topScrollRef}
+          className="overflow-x-auto overflow-y-hidden border-b border-slate-200 bg-slate-50"
+          onScroll={(event) => syncScroll('top', bodyScrollRef, event.currentTarget.scrollLeft)}
+        >
+          <div style={{ width: scrollMetrics.scrollWidth, height: 16 }} />
+        </div>
+      )}
+      <div
+        ref={bodyScrollRef}
+        className={scrollerClassName}
+        onScroll={(event) => syncScroll('body', topScrollRef, event.currentTarget.scrollLeft)}
+      >
+        {children}
+      </div>
     </div>
   )
 }
 
 const TableView = memo(function TableView({
   menuScope = 'table',
-  boardColumns,
   visibleColumns,
   filteredRows,
   isEditing,
@@ -1883,11 +2734,7 @@ const TableView = memo(function TableView({
   clearFiltersForColumn,
   renameColumn,
   changeColumnType,
-  addStatusOption,
-  renameStatusOption,
-  deleteStatusOption,
-  statusDraftByColumn,
-  setStatusDraftByColumn,
+  openStatusManager,
   requestColumnDelete,
   reorderColumns,
   resizeColumn,
@@ -1897,8 +2744,13 @@ const TableView = memo(function TableView({
   updateCell,
   deleteRow,
   readOnly,
+  canManageColumns,
   textSize,
   textSizeClasses,
+  conditionalFormattingRules,
+  sortConfig,
+  onSortColumn,
+  onOpenRowUpdates,
 }) {
   const columnFilters = useMemo(
     () =>
@@ -1930,8 +2782,10 @@ const TableView = memo(function TableView({
   }
 
   return (
-    <div className="overflow-visible rounded-xl border border-slate-200 bg-white shadow-soft">
-      <div className="overflow-x-auto overflow-y-visible">
+    <HorizontalScrollFrame
+      outerClassName="overflow-visible rounded-xl border border-slate-200 bg-white shadow-soft"
+      scrollerClassName="overflow-x-auto overflow-y-visible"
+    >
       <table className={`min-w-full border-collapse ${textSizeClasses.table}`}>
         <thead className="sticky top-0 z-10 bg-slate-50">
           <tr>
@@ -1953,6 +2807,11 @@ const TableView = memo(function TableView({
                     className={`line-clamp-2 whitespace-normal break-words leading-tight ${draggingColumnKey === column.key ? 'opacity-40' : ''}`}
                   >
                     {column.label}
+                    {sortConfig?.columnKey === column.key ? (
+                      <span className="ml-1 inline-block text-[10px] text-slate-400">
+                        {sortConfig.direction === 'asc' ? '↑' : '↓'}
+                      </span>
+                    ) : null}
                   </span>
                   {!readOnly && (
                     <button
@@ -2025,15 +2884,17 @@ const TableView = memo(function TableView({
                                   <FilterX size={14} />
                                 </button>
                               )}
-                              <button
-                                type="button"
-                                className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 bg-rose-50 text-rose-600 transition hover:bg-rose-100 hover:text-rose-700"
-                                onClick={() => requestColumnDelete(column.key)}
-                                aria-label={`Delete ${column.label}`}
-                                title="Delete"
-                              >
-                                <Trash2 size={14} />
-                              </button>
+                              {canManageColumns && (
+                                <button
+                                  type="button"
+                                  className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-rose-200 bg-rose-50 text-rose-600 transition hover:bg-rose-100 hover:text-rose-700"
+                                  onClick={() => requestColumnDelete(column.key)}
+                                  aria-label={`Delete ${column.label}`}
+                                  title="Delete"
+                                >
+                                  <Trash2 size={14} />
+                                </button>
+                              )}
                             </div>
                           </div>
                           <div className="space-y-1 px-1 pb-1">
@@ -2050,61 +2911,54 @@ const TableView = memo(function TableView({
                               ))}
                             </select>
                           </div>
+                    <div className="space-y-2 border-t border-slate-200 px-1 py-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Sort rows</p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <button
+                          type="button"
+                          className={`inline-flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition ${
+                            sortConfig?.columnKey === column.key && sortConfig?.direction === 'asc'
+                              ? 'border-sky-200 bg-sky-50 text-sky-700'
+                              : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                          onClick={() => onSortColumn?.({ columnKey: column.key, direction: 'asc' })}
+                        >
+                          <ArrowUpAZ size={14} />
+                          Asc
+                        </button>
+                        <button
+                          type="button"
+                          className={`inline-flex items-center justify-center gap-2 rounded-md border px-3 py-2 text-xs font-medium transition ${
+                            sortConfig?.columnKey === column.key && sortConfig?.direction === 'desc'
+                              ? 'border-sky-200 bg-sky-50 text-sky-700'
+                              : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                          onClick={() => onSortColumn?.({ columnKey: column.key, direction: 'desc' })}
+                        >
+                          <ArrowDownAZ size={14} />
+                          Desc
+                        </button>
+                      </div>
+                      {sortConfig?.columnKey === column.key && (
+                        <button
+                          type="button"
+                          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                          onClick={() => onSortColumn?.(null)}
+                        >
+                          Clear sort
+                        </button>
+                      )}
+                    </div>
                     {column.type === 'status' && (
                       <div className="mt-2 space-y-2 border-t border-slate-200 px-1 py-2">
-                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Statuses</p>
-                        <div className="space-y-1.5">
-                          {getStatusOptionsForColumn(column).map((option) => (
-                            <div key={option} className="flex items-center gap-2 rounded-md bg-slate-50 px-2 py-1.5">
-                              <span className={`inline-flex rounded-full px-2 py-0.5 text-[11px] font-medium ${getStatusTone(option)}`}>
-                                {option}
-                              </span>
-                              <button
-                                type="button"
-                                className="ml-auto text-[11px] font-medium text-slate-500 transition hover:text-slate-800"
-                                onClick={() => renameStatusOption(column.key, option)}
-                              >
-                                Edit
-                              </button>
-                              <button
-                                type="button"
-                                className="text-[11px] font-medium text-rose-600 transition hover:text-rose-700 disabled:opacity-40"
-                                onClick={() => deleteStatusOption(column.key, option)}
-                                disabled={getStatusOptionsForColumn(column).length <= 1}
-                              >
-                                Delete
-                              </button>
-                            </div>
-                          ))}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="text"
-                            value={statusDraftByColumn[column.key] || ''}
-                            onChange={(event) =>
-                              setStatusDraftByColumn((current) => ({
-                                ...current,
-                                [column.key]: event.target.value,
-                              }))
-                            }
-                            onKeyDown={(event) => {
-                              if (event.key === 'Enter') {
-                                event.preventDefault()
-                                addStatusOption(column.key)
-                              }
-                            }}
-                            placeholder="Add status"
-                            className="w-full rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs outline-none"
-                          />
-                          <button
-                            type="button"
-                            className="inline-flex items-center gap-1 rounded-md border border-slate-300 px-2 py-1.5 text-[11px] font-medium text-slate-700 transition hover:bg-slate-50"
-                            onClick={() => addStatusOption(column.key)}
-                          >
-                            <Plus size={12} />
-                            Add
-                          </button>
-                        </div>
+                        <button
+                          type="button"
+                          className="inline-flex w-full items-center justify-between rounded-md border border-slate-300 bg-white px-3 py-2 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                          onClick={() => openStatusManager(column.key)}
+                        >
+                          <span>Manage statuses</span>
+                          <span className="text-slate-400">{getStatusOptionsForColumn(column).length}</span>
+                        </button>
                       </div>
                     )}
                     <div className="mt-2 space-y-2 border-t border-slate-200 pt-2">
@@ -2192,10 +3046,18 @@ const TableView = memo(function TableView({
               {visibleColumns.map((column) => (
                 <td
                   key={`${row.id}-${column.key}`}
-                  className={`border-b border-r border-slate-200 align-middle last:border-r-0 ${textSizeClasses.cell}`}
-                  onClick={() => !readOnly && setActiveCell({ rowId: row.id, columnKey: column.key })}
+                  className={`border-b border-r border-slate-200 align-middle last:border-r-0 ${textSizeClasses.cell} ${getConditionalFormattingClassName(
+                    conditionalFormattingRules,
+                    column,
+                    row[column.key],
+                  )}`}
+                  onClick={() => {
+                    if (!readOnly && column.type !== 'updates') {
+                      setActiveCell({ rowId: row.id, columnKey: column.key })
+                    }
+                  }}
                 >
-                  {!readOnly && isEditing(row.id, column.key) ? (
+                  {!readOnly && column.type !== 'updates' && isEditing(row.id, column.key) ? (
                     <EditableCell
                       column={column}
                       value={row[column.key]}
@@ -2206,7 +3068,13 @@ const TableView = memo(function TableView({
                       onChange={updateCell}
                     />
                   ) : (
-                    <ReadOnlyCell column={column} value={row[column.key]} textSize={textSize} />
+                    <ReadOnlyCell
+                      column={column}
+                      value={row[column.key]}
+                      row={row}
+                      textSize={textSize}
+                      onOpenUpdates={onOpenRowUpdates}
+                    />
                   )}
                 </td>
               ))}
@@ -2227,8 +3095,7 @@ const TableView = memo(function TableView({
           ))}
         </tbody>
       </table>
-      </div>
-    </div>
+    </HorizontalScrollFrame>
   )
 })
 
@@ -2250,11 +3117,7 @@ const GroupedTableView = memo(function GroupedTableView({
   clearFiltersForColumn,
   renameColumn,
   changeColumnType,
-  addStatusOption,
-  renameStatusOption,
-  deleteStatusOption,
-  statusDraftByColumn,
-  setStatusDraftByColumn,
+  openStatusManager,
   requestColumnDelete,
   reorderColumns,
   resizeColumn,
@@ -2264,20 +3127,51 @@ const GroupedTableView = memo(function GroupedTableView({
   updateCell,
   deleteRow,
   readOnly,
+  canManageColumns,
   textSize,
   textSizeClasses,
   collapsedGroupLabels = [],
+  draggingGroupLabel,
+  setDraggingGroupLabel,
+  secondaryGroupByKey = '',
+  secondaryGroupByLabel = '',
   toggleGroupedSection,
+  reorderGroupedSections,
   onAddRowToGroup,
+  conditionalFormattingRules,
+  sortConfig,
+  onSortColumn,
+  onOpenRowUpdates,
 }) {
   return (
     <div className="space-y-4">
       {groupedRows.map((group) => (
         <section key={group.label} className="overflow-visible rounded-xl border border-slate-200 bg-white shadow-soft">
           <div className="flex items-center justify-between border-b border-slate-200 bg-slate-50 px-4 py-3">
-            <div>
+            <div
+              draggable={groupedRows.length > 1}
+              onDragStart={() => setDraggingGroupLabel(group.label)}
+              onDragOver={(event) => {
+                if (groupedRows.length > 1) event.preventDefault()
+              }}
+              onDrop={() => reorderGroupedSections(draggingGroupLabel, group.label)}
+              onDragEnd={() => setDraggingGroupLabel(null)}
+              className={`flex min-w-0 items-start gap-3 rounded-lg px-1 py-1 ${
+                groupedRows.length > 1 ? 'cursor-grab active:cursor-grabbing' : ''
+              } ${
+                draggingGroupLabel === group.label ? 'opacity-50' : ''
+              }`}
+              title={groupedRows.length > 1 ? 'Drag to reorder sections' : undefined}
+            >
+              {groupedRows.length > 1 && (
+                <span className="mt-0.5 text-slate-400">
+                  <GripVertical size={16} />
+                </span>
+              )}
+              <div>
               <p className={`font-semibold text-slate-900 ${textSizeClasses.groupHeaderTitle}`}>{group.label}</p>
               <p className={`text-slate-500 ${textSizeClasses.groupHeaderMeta}`}>{group.items.length} items</p>
+              </div>
             </div>
             <div className="flex items-center gap-2">
               {!readOnly && (
@@ -2302,41 +3196,110 @@ const GroupedTableView = memo(function GroupedTableView({
           </div>
 
           {!collapsedGroupLabels.includes(group.label) ? (
-            <TableView
-              menuScope={`${menuScopePrefix}:${group.label}`}
-              boardColumns={boardColumns}
-              visibleColumns={visibleColumns}
-            filteredRows={group.items}
-            isEditing={isEditing}
-            openColumnMenu={openColumnMenu}
-            filters={filters}
-            toggleColumnMenu={toggleColumnMenu}
-            columnMenuStyle={columnMenuStyle}
-            columnFilterSearch={columnFilterSearch}
-            setColumnFilterSearch={setColumnFilterSearch}
-            filterOptionsByColumn={filterOptionsByColumn}
-            setFilterValues={setFilterValues}
-            toggleFilterValue={toggleFilterValue}
-            clearFiltersForColumn={clearFiltersForColumn}
-            renameColumn={renameColumn}
-            changeColumnType={changeColumnType}
-            addStatusOption={addStatusOption}
-            renameStatusOption={renameStatusOption}
-            deleteStatusOption={deleteStatusOption}
-            statusDraftByColumn={statusDraftByColumn}
-            setStatusDraftByColumn={setStatusDraftByColumn}
-            requestColumnDelete={requestColumnDelete}
-              reorderColumns={reorderColumns}
-              resizeColumn={resizeColumn}
-              draggingColumnKey={draggingColumnKey}
-              setDraggingColumnKey={setDraggingColumnKey}
-              setActiveCell={setActiveCell}
-              updateCell={updateCell}
-              deleteRow={deleteRow}
-              readOnly={readOnly}
-              textSize={textSize}
-              textSizeClasses={textSizeClasses}
-            />
+            secondaryGroupByKey && group.children?.length ? (
+              <div className="space-y-3 p-3">
+                {group.children.map((childGroup) => (
+                  <section
+                    key={`${group.label}-${childGroup.label}`}
+                    className="overflow-visible rounded-xl border border-slate-200 bg-slate-50/60 shadow-soft"
+                  >
+                    <div className="flex items-center justify-between gap-3 border-b border-slate-200 bg-white/70 px-4 py-3">
+                      <div>
+                        <p className={`font-semibold text-slate-900 ${textSizeClasses.groupHeaderTitle}`}>
+                          {childGroup.label}
+                        </p>
+                        <p className={`text-slate-500 ${textSizeClasses.groupHeaderMeta}`}>
+                          {childGroup.items.length} items
+                          {secondaryGroupByLabel ? ` · ${secondaryGroupByLabel}` : ''}
+                        </p>
+                      </div>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          onClick={() => onAddRowToGroup(group.label)}
+                          className={`rounded-lg border border-slate-300 bg-white font-medium text-slate-700 transition hover:bg-slate-50 ${textSizeClasses.groupHeaderAction}`}
+                        >
+                          Add item
+                        </button>
+                      )}
+                    </div>
+                    <TableView
+                      menuScope={`${menuScopePrefix}:${group.label}:${childGroup.label}`}
+                      boardColumns={boardColumns}
+                      visibleColumns={visibleColumns}
+                      filteredRows={childGroup.items}
+                      isEditing={isEditing}
+                      openColumnMenu={openColumnMenu}
+                      filters={filters}
+                      toggleColumnMenu={toggleColumnMenu}
+                      columnMenuStyle={columnMenuStyle}
+                      columnFilterSearch={columnFilterSearch}
+                      setColumnFilterSearch={setColumnFilterSearch}
+                      filterOptionsByColumn={filterOptionsByColumn}
+                      setFilterValues={setFilterValues}
+                      toggleFilterValue={toggleFilterValue}
+                      clearFiltersForColumn={clearFiltersForColumn}
+                      renameColumn={renameColumn}
+                      changeColumnType={changeColumnType}
+                      openStatusManager={openStatusManager}
+                      requestColumnDelete={requestColumnDelete}
+                      reorderColumns={reorderColumns}
+                      resizeColumn={resizeColumn}
+                      draggingColumnKey={draggingColumnKey}
+                      setDraggingColumnKey={setDraggingColumnKey}
+                      setActiveCell={setActiveCell}
+                      updateCell={updateCell}
+                      deleteRow={deleteRow}
+                      readOnly={readOnly}
+                      canManageColumns={canManageColumns}
+                      textSize={textSize}
+                      textSizeClasses={textSizeClasses}
+                      conditionalFormattingRules={conditionalFormattingRules}
+                      sortConfig={sortConfig}
+                      onSortColumn={onSortColumn}
+                      onOpenRowUpdates={onOpenRowUpdates}
+                    />
+                  </section>
+                ))}
+              </div>
+            ) : (
+              <TableView
+                menuScope={`${menuScopePrefix}:${group.label}`}
+                boardColumns={boardColumns}
+                visibleColumns={visibleColumns}
+                filteredRows={group.items}
+                isEditing={isEditing}
+                openColumnMenu={openColumnMenu}
+                filters={filters}
+                toggleColumnMenu={toggleColumnMenu}
+                columnMenuStyle={columnMenuStyle}
+                columnFilterSearch={columnFilterSearch}
+                setColumnFilterSearch={setColumnFilterSearch}
+                filterOptionsByColumn={filterOptionsByColumn}
+                setFilterValues={setFilterValues}
+                toggleFilterValue={toggleFilterValue}
+                clearFiltersForColumn={clearFiltersForColumn}
+                renameColumn={renameColumn}
+                changeColumnType={changeColumnType}
+                openStatusManager={openStatusManager}
+                requestColumnDelete={requestColumnDelete}
+                reorderColumns={reorderColumns}
+                resizeColumn={resizeColumn}
+                draggingColumnKey={draggingColumnKey}
+                setDraggingColumnKey={setDraggingColumnKey}
+                setActiveCell={setActiveCell}
+                updateCell={updateCell}
+                deleteRow={deleteRow}
+                readOnly={readOnly}
+                canManageColumns={canManageColumns}
+                textSize={textSize}
+                textSizeClasses={textSizeClasses}
+                conditionalFormattingRules={conditionalFormattingRules}
+                sortConfig={sortConfig}
+                onSortColumn={onSortColumn}
+                onOpenRowUpdates={onOpenRowUpdates}
+              />
+            )
           ) : (
             <div className="px-4 py-3 text-sm text-slate-500">
               {group.items.length} rows hidden in this section.
@@ -2514,13 +3477,22 @@ function GanttView({ rows, columns, ganttStartKey, ganttEndKey, ganttGroupByKey,
   const startKey = ganttStartKey || columns.find((column) => column.key === 'start_date')?.key || columns.find((column) => column.type === 'date')?.key || ''
   const endKey = ganttEndKey || columns.find((column) => column.key === 'due_date')?.key || startKey
   const itemsWithDates = rows
-    .map((row) => ({
-      ...row,
-      __ganttStart: row[startKey],
-      __ganttEnd: row[endKey] || row[startKey],
-      __ganttGroup: ganttGroupByKey ? String(row[ganttGroupByKey] || 'Uncategorized') : '',
-    }))
-    .filter((row) => row.__ganttStart && row.__ganttEnd)
+    .map((row) => {
+      const startDate = getValidDate(row[startKey])
+      const endDate = getValidDate(row[endKey] || row[startKey])
+
+      if (!startDate || !endDate) return null
+
+      return {
+        ...row,
+        __ganttStart: row[startKey],
+        __ganttEnd: row[endKey] || row[startKey],
+        __ganttStartDate: startDate,
+        __ganttEndDate: endDate,
+        __ganttGroup: ganttGroupByKey ? String(row[ganttGroupByKey] || 'Uncategorized') : '',
+      }
+    })
+    .filter(Boolean)
 
   if (!itemsWithDates.length) {
     return (
@@ -2530,8 +3502,8 @@ function GanttView({ rows, columns, ganttStartKey, ganttEndKey, ganttGroupByKey,
     )
   }
 
-  const startTimestamp = Math.min(...itemsWithDates.map((row) => new Date(row.__ganttStart).getTime()))
-  const endTimestamp = Math.max(...itemsWithDates.map((row) => new Date(row.__ganttEnd).getTime()))
+  const startTimestamp = Math.min(...itemsWithDates.map((row) => row.__ganttStartDate.getTime()))
+  const endTimestamp = Math.max(...itemsWithDates.map((row) => row.__ganttEndDate.getTime()))
   const totalDays = Math.max(1, Math.round((endTimestamp - startTimestamp) / (1000 * 60 * 60 * 24)) + 1)
   const timelineSegments = getGanttScaleSegments(startTimestamp, endTimestamp, scale)
   const useVerticalLabels = timelineSegments.length > 12 || (scale === 'day' && timelineSegments.length > 8)
@@ -2551,7 +3523,10 @@ function GanttView({ rows, columns, ganttStartKey, ganttEndKey, ganttGroupByKey,
   ]
 
   return (
-    <div className="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft">
+    <HorizontalScrollFrame
+      outerClassName="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-soft"
+      scrollerClassName="overflow-x-auto"
+    >
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 bg-slate-50 px-4 py-3">
         <div>
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Gantt timeline</p>
@@ -2615,8 +3590,8 @@ function GanttView({ rows, columns, ganttStartKey, ganttEndKey, ganttGroupByKey,
               </div>
             )}
             {groupRows.map((row) => {
-              const startOffset = Math.round((new Date(row.__ganttStart).getTime() - startTimestamp) / (1000 * 60 * 60 * 24))
-              const duration = Math.max(1, Math.round((new Date(row.__ganttEnd).getTime() - new Date(row.__ganttStart).getTime()) / (1000 * 60 * 60 * 24)) + 1)
+              const startOffset = Math.round((row.__ganttStartDate.getTime() - startTimestamp) / (1000 * 60 * 60 * 24))
+              const duration = Math.max(1, Math.round((row.__ganttEndDate.getTime() - row.__ganttStartDate.getTime()) / (1000 * 60 * 60 * 24)) + 1)
 
               return (
                 <div key={row.id} className="grid gap-2 md:grid-cols-[180px_minmax(0,1fr)] md:items-center lg:grid-cols-[220px_minmax(0,1fr)]">
@@ -2652,6 +3627,210 @@ function GanttView({ rows, columns, ganttStartKey, ganttEndKey, ganttGroupByKey,
             })}
           </div>
         ))}
+        </div>
+      </div>
+    </HorizontalScrollFrame>
+  )
+}
+
+function ConditionalFormattingModal({ columns, rules, onAddRule, onClose, onPatchRule, onRemoveRule }) {
+  return (
+    <div
+      className="fixed inset-0 z-[92] flex items-center justify-center bg-slate-950/35 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <div
+        className="max-h-[calc(100vh-2rem)] w-full max-w-5xl overflow-y-auto rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Conditional formatting</p>
+            <h3 className="mt-2 text-xl font-semibold text-slate-900">Style cells based on values</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Build saved rules per board view. Match a column value, then set color, weight, or font.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 transition hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          {rules.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              No rules yet. Add a rule to highlight values in any column.
+            </div>
+          ) : (
+            rules.map((rule, index) => {
+              const selectedColumn = columns.find((column) => column.key === rule.columnKey) || columns[0] || null
+              const needsValue = !['is_empty', 'is_not_empty'].includes(rule.operator)
+              const needsSecondValue = rule.operator === 'between'
+
+              return (
+                <div key={rule.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-sm font-semibold text-slate-900">Rule {index + 1}</p>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveRule(rule.id)}
+                      className="rounded-full border border-rose-200 bg-rose-50 px-3 py-1 text-xs font-semibold text-rose-700 transition hover:bg-rose-100"
+                    >
+                      Remove
+                    </button>
+                  </div>
+
+                  <div className="mt-4 grid gap-4 lg:grid-cols-4">
+                    <label className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Column</span>
+                      <select
+                        value={rule.columnKey}
+                        onChange={(event) => onPatchRule(rule.id, { columnKey: event.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
+                      >
+                        {columns.map((column) => (
+                          <option key={column.key} value={column.key}>
+                            {column.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Condition</span>
+                      <select
+                        value={rule.operator}
+                        onChange={(event) => onPatchRule(rule.id, { operator: event.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
+                      >
+                        {conditionalOperatorOptions.map((option) => (
+                          <option key={option.value} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    {needsValue ? (
+                      <label className="space-y-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Value</span>
+                        <input
+                          type={selectedColumn?.type === 'number' || selectedColumn?.type === 'currency' ? 'number' : selectedColumn?.type === 'date' ? 'date' : 'text'}
+                          value={rule.value || ''}
+                          onChange={(event) => onPatchRule(rule.id, { value: event.target.value })}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
+                          placeholder="Comparison value"
+                        />
+                      </label>
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-500">
+                        This condition does not need a value.
+                      </div>
+                    )}
+
+                    {needsSecondValue ? (
+                      <label className="space-y-2">
+                        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">And value</span>
+                        <input
+                          type={selectedColumn?.type === 'number' || selectedColumn?.type === 'currency' ? 'number' : selectedColumn?.type === 'date' ? 'date' : 'text'}
+                          value={rule.secondaryValue || ''}
+                          onChange={(event) => onPatchRule(rule.id, { secondaryValue: event.target.value })}
+                          className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
+                          placeholder="Upper bound"
+                        />
+                      </label>
+                    ) : (
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-white px-3 py-2.5 text-sm text-slate-500">
+                        Add a second value by using the “Between” operator.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="mt-4 grid gap-4 md:grid-cols-4">
+                    <label className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Text color</span>
+                      <select
+                        value={rule.textColor || ''}
+                        onChange={(event) => onPatchRule(rule.id, { textColor: event.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
+                      >
+                        {conditionalTextColorOptions.map((option) => (
+                          <option key={option.value || 'default'} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Cell background</span>
+                      <select
+                        value={rule.backgroundColor || ''}
+                        onChange={(event) => onPatchRule(rule.id, { backgroundColor: event.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
+                      >
+                        {conditionalBackgroundOptions.map((option) => (
+                          <option key={option.value || 'none'} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="space-y-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Font family</span>
+                      <select
+                        value={rule.fontFamily || ''}
+                        onChange={(event) => onPatchRule(rule.id, { fontFamily: event.target.value })}
+                        className="w-full rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm text-slate-900 outline-none ring-sky-200 transition focus:ring"
+                      >
+                        {conditionalFontFamilyOptions.map((option) => (
+                          <option key={option.value || 'default'} value={option.value}>
+                            {option.label}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={rule.bold === true}
+                        onChange={(event) => onPatchRule(rule.id, { bold: event.target.checked })}
+                      />
+                      <span className="text-sm font-medium text-slate-700">Bold text</span>
+                    </label>
+                  </div>
+                </div>
+              )
+            })
+          )}
+        </div>
+
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3">
+          <button
+            type="button"
+            onClick={onAddRule}
+            className="rounded-full border border-slate-300 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50"
+          >
+            Add rule
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full px-4 py-2 text-sm font-semibold text-white transition hover:opacity-90"
+            style={{ backgroundColor: 'var(--pulse-accent)' }}
+          >
+            Done
+          </button>
         </div>
       </div>
     </div>
@@ -2731,7 +3910,11 @@ function KanbanRowEditorModal({ row, columns, onClose, onDelete, onSave }) {
             {columns.map((column) => (
               <label key={column.key} className="space-y-2">
                 <span className="text-sm font-medium text-slate-900">{column.label}</span>
-                {column.type === 'status' ? (
+                {column.type === 'updates' ? (
+                  <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2.5 text-sm text-slate-600">
+                    {draft[column.key] ? formatDateTimeValue(draft[column.key]) : 'No updates yet'}
+                  </div>
+                ) : column.type === 'status' ? (
                   <select
                     value={draft[column.key] ?? getStatusOptionsForColumn(column)[0] ?? ''}
                     onChange={(event) =>
@@ -2834,14 +4017,33 @@ function BoardLoadingState() {
 }
 
 function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange }) {
-  const [draftValue, setDraftValue] = useState(value ?? getDefaultValue(column.type, column))
+  const commitStateRef = useRef('idle')
+
+  function getInitialDraftValue() {
+    if (column.type === 'date' && (value == null || value === '')) {
+      return formatDateInputValue(new Date())
+    }
+
+    return value ?? getDefaultValue(column.type, column)
+  }
+
+  const [draftValue, setDraftValue] = useState(getInitialDraftValue)
 
   useEffect(() => {
-    setDraftValue(value ?? getDefaultValue(column.type, column))
+    commitStateRef.current = 'idle'
+    setDraftValue(getInitialDraftValue())
   }, [column, value])
 
   function commitValue(nextValue = draftValue) {
+    if (commitStateRef.current !== 'idle') return
+
+    commitStateRef.current = 'committed'
     onChange(rowId, column.key, nextValue)
+    onBlur()
+  }
+
+  function cancelEditing() {
+    commitStateRef.current = 'cancelled'
     onBlur()
   }
 
@@ -2851,8 +4053,12 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
         autoFocus
         className={`w-full rounded-md border border-slate-300 bg-white outline-none ring-sky-200 transition focus:ring ${textSizeClasses.input}`}
         value={draftValue}
-        onBlur={onBlur}
-        onChange={(event) => setDraftValue(event.target.value)}
+        onBlur={() => commitValue(draftValue)}
+        onChange={(event) => {
+          const nextValue = event.target.value
+          setDraftValue(nextValue)
+          commitValue(nextValue)
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault()
@@ -2860,8 +4066,7 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
           }
           if (event.key === 'Escape') {
             event.preventDefault()
-            setDraftValue(value ?? getDefaultValue(column.type, column))
-            onBlur()
+            cancelEditing()
           }
         }}
       >
@@ -2880,8 +4085,12 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
         autoFocus
         className={`w-full rounded-md border border-slate-300 bg-white outline-none ring-sky-200 transition focus:ring ${textSizeClasses.input}`}
         value={String(draftValue)}
-        onBlur={onBlur}
-        onChange={(event) => setDraftValue(event.target.value === 'true')}
+        onBlur={() => commitValue(draftValue)}
+        onChange={(event) => {
+          const nextValue = event.target.value === 'true'
+          setDraftValue(nextValue)
+          commitValue(nextValue)
+        }}
         onKeyDown={(event) => {
           if (event.key === 'Enter') {
             event.preventDefault()
@@ -2889,8 +4098,7 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
           }
           if (event.key === 'Escape') {
             event.preventDefault()
-            setDraftValue(value ?? getDefaultValue(column.type, column))
-            onBlur()
+            cancelEditing()
           }
         }}
       >
@@ -2907,7 +4115,7 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
       step={column.type === 'currency' ? '0.01' : column.type === 'number' ? '1' : undefined}
       value={draftValue}
       className={`w-full rounded-md border border-slate-300 bg-white outline-none ring-sky-200 transition focus:ring ${textSizeClasses.input}`}
-      onBlur={onBlur}
+      onBlur={() => commitValue(draftValue)}
       onChange={(event) => {
         const nextValue =
           column.type === 'number' || column.type === 'currency' ? Number(event.target.value || 0) : event.target.value
@@ -2920,15 +4128,14 @@ function EditableCell({ column, value, rowId, textSizeClasses, onBlur, onChange 
         }
         if (event.key === 'Escape') {
           event.preventDefault()
-          setDraftValue(value ?? getDefaultValue(column.type, column))
-          onBlur()
+          cancelEditing()
         }
       }}
     />
   )
 }
 
-function ReadOnlyCell({ column, value, textSize = 'medium' }) {
+function ReadOnlyCell({ column, value, row, textSize = 'medium', onOpenUpdates }) {
   const textClass = textSize === 'large' ? 'text-base' : textSize === 'small' ? 'text-xs' : 'text-sm'
   const wrappedTextClass = `block line-clamp-2 whitespace-normal break-words leading-snug ${textClass}`
   const ownerBadgeClass =
@@ -2944,7 +4151,7 @@ function ReadOnlyCell({ column, value, textSize = 'medium' }) {
         className={`inline-flex rounded-full px-2.5 py-1 font-medium ${
           textSize === 'large' ? 'text-sm' : 'text-xs'
         } ${
-          getStatusTone(value)
+          getStatusTone(value, column)
         }`}
       >
         {value}
@@ -2977,15 +4184,33 @@ function ReadOnlyCell({ column, value, textSize = 'medium' }) {
     )
   }
 
-  if (isMapsColumn(column)) {
+  if (column.type === 'updates') {
+    if (!value) return <span className={`text-slate-500 ${textClass}`}>No updates yet</span>
+
+    return (
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation()
+          onOpenUpdates?.(row)
+        }}
+        className={`inline text-left font-medium text-sky-700 underline decoration-sky-300 underline-offset-2 transition hover:text-sky-900 ${textClass}`}
+      >
+        {formatDateTimeValue(value)}
+      </button>
+    )
+  }
+
+  if (isMapsColumn(column) || isTrackingColumn(column)) {
     if (!value) return <span className={`text-slate-700 ${textClass}`}>—</span>
 
     return (
       <a
-        href={getMapsUrl(value)}
+        href={getColumnLinkUrl(column, value)}
         target="_blank"
         rel="noreferrer"
-        className={`font-medium text-sky-700 underline decoration-sky-300 underline-offset-2 transition hover:text-sky-900 ${wrappedTextClass}`}
+        className={`inline font-medium text-sky-700 underline decoration-sky-300 underline-offset-2 transition hover:text-sky-900 ${textClass}`}
+        onClick={(event) => event.stopPropagation()}
       >
         {value}
       </a>
@@ -2993,6 +4218,172 @@ function ReadOnlyCell({ column, value, textSize = 'medium' }) {
   }
 
   return <span className={`text-slate-700 ${wrappedTextClass}`}>{formatColumnValue(value, column.type)}</span>
+}
+
+function RowUpdateDetailsModal({ rowName, updates, onClose }) {
+  return (
+    <div
+      className="fixed inset-0 z-[94] flex items-center justify-center bg-slate-950/35 p-4"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose()
+        }
+      }}
+    >
+      <div
+        className="max-h-[calc(100vh-2rem)] w-full max-w-3xl overflow-y-auto rounded-[1.75rem] border border-slate-200 bg-white p-5 shadow-2xl"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.28em] text-slate-500">Latest row updates</p>
+            <h3 className="mt-2 text-xl font-semibold text-slate-900">{rowName}</h3>
+            <p className="mt-1 text-sm text-slate-600">
+              Review what changed on this row and when each edit happened.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-slate-500 transition hover:bg-slate-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-4">
+          {updates.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
+              No edits have been recorded for this row yet.
+            </div>
+          ) : (
+            updates.map((entry) => (
+              <article key={entry.id} className="rounded-2xl border border-slate-200 bg-slate-50/70 p-4">
+                <p className="text-sm font-semibold text-slate-900">{formatDateTimeValue(entry.editedAt)}</p>
+                <div className="mt-3 space-y-3">
+                  {(entry.changes || []).map((change) => (
+                    <div key={`${entry.id}-${change.columnKey}`} className="rounded-xl border border-slate-200 bg-white p-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        {change.columnLabel}
+                      </p>
+                      <div className="mt-2 grid gap-2 md:grid-cols-2">
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">Before</p>
+                          <p className="mt-1 text-sm text-slate-700">
+                            {formatColumnValue(change.previousValue, 'text')}
+                          </p>
+                        </div>
+                        <div>
+                          <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-400">After</p>
+                          <p className="mt-1 text-sm font-medium text-slate-900">
+                            {formatColumnValue(change.nextValue, 'text')}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function StatusManagerModal({
+  column,
+  statusDraftValue,
+  setStatusDraftValue,
+  onClose,
+  onAddStatus,
+  onRenameStatus,
+  onDeleteStatus,
+  onUpdateStatusColor,
+}) {
+  if (!column || column.type !== 'status') return null
+
+  return (
+    <div className="fixed inset-0 z-[95] flex items-center justify-center bg-slate-950/35 p-4">
+      <div className="w-full max-w-lg rounded-2xl border border-slate-200 bg-white p-5 shadow-2xl">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Status settings</p>
+            <h3 className="mt-1 text-lg font-semibold text-slate-900">{column.label}</h3>
+          </div>
+          <button
+            type="button"
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="mt-4 space-y-2">
+          {getStatusOptionsForColumn(column).map((option) => (
+            <div key={option} className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-medium ${getStatusTone(option, column)}`}>
+                {option}
+              </span>
+              <select
+                className="rounded-md border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none"
+                value={getStatusTone(option, column)}
+                onChange={(event) => onUpdateStatusColor(option, event.target.value)}
+                aria-label={`Conditional color for ${option}`}
+              >
+                {statusColorOptions.map((colorOption) => (
+                  <option key={colorOption.id} value={colorOption.className}>
+                    {colorOption.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="ml-auto rounded-md border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 transition hover:bg-slate-50"
+                onClick={() => onRenameStatus(option)}
+              >
+                Edit
+              </button>
+              <button
+                type="button"
+                className="rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 transition hover:bg-rose-100 disabled:opacity-40"
+                onClick={() => onDeleteStatus(option)}
+                disabled={getStatusOptionsForColumn(column).length <= 1}
+              >
+                Delete
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex items-center gap-2 border-t border-slate-200 pt-4">
+          <input
+            type="text"
+            value={statusDraftValue}
+            onChange={(event) => setStatusDraftValue(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                onAddStatus()
+              }
+            }}
+            placeholder="Add status"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none"
+          />
+          <button
+            type="button"
+            className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            onClick={onAddStatus}
+          >
+            <Plus size={14} />
+            Add
+          </button>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export default BoardTable

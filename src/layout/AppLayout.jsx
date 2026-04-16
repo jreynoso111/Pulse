@@ -1,5 +1,5 @@
 import { Bell, LogOut, PanelLeftClose, PanelLeftOpen, Search, Trash2 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Outlet, useNavigate } from 'react-router-dom'
 import Sidebar from '../components/Sidebar'
 import { usePulseWorkspace } from '../context/PulseWorkspaceContext'
@@ -27,13 +27,21 @@ function getNotificationGroupKey(notification) {
   ].join('::')
 }
 
+function normalizeSearchText(value) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
 function AppLayout() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileNavOpen, setMobileNavOpen] = useState(false)
   const [showNotifications, setShowNotifications] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [showSearchResults, setShowSearchResults] = useState(false)
+  const searchRef = useRef(null)
   const navigate = useNavigate()
   const {
     acceptBoardShare,
+    boards,
     currentUser,
     deleteNotification,
     notifications,
@@ -71,31 +79,86 @@ function AppLayout() {
       }))
       .sort((left, right) => new Date(right.latest.createdAt).getTime() - new Date(left.latest.createdAt).getTime())
   }, [notifications])
+  const globalSearchResults = useMemo(() => {
+    const normalizedQuery = normalizeSearchText(searchQuery)
+    if (!normalizedQuery) return []
+
+    return boards
+      .flatMap((board) => {
+        const boardMatches = []
+        const boardText = [board.name, board.description, board.slug].map(normalizeSearchText).join(' ')
+        if (boardText.includes(normalizedQuery)) {
+          boardMatches.push({
+            id: `board:${board.id}`,
+            type: 'Board',
+            title: board.name,
+            subtitle: board.description || 'Board details',
+            meta: board.slug,
+            boardSlug: board.slug,
+          })
+        }
+
+        const columnMatches = board.columns
+          .filter((column) =>
+            [column.label, column.key, column.type].map(normalizeSearchText).join(' ').includes(normalizedQuery),
+          )
+          .map((column) => ({
+            id: `column:${board.id}:${column.key}`,
+            type: 'Column',
+            title: `${column.label} in ${board.name}`,
+            subtitle: `${column.type} column`,
+            meta: column.key,
+            boardSlug: board.slug,
+          }))
+
+        const rowMatches = board.items.flatMap((item) =>
+          board.columns.flatMap((column) => {
+            const cellValue = item[column.key]
+            const normalizedValue = normalizeSearchText(cellValue)
+            if (!normalizedValue || !normalizedValue.includes(normalizedQuery)) return []
+
+            return [
+              {
+                id: `cell:${board.id}:${item.id}:${column.key}`,
+                type: 'Value',
+                title: item.name || 'Untitled row',
+                subtitle: `${column.label}: ${String(cellValue)}`,
+                meta: board.name,
+                boardSlug: board.slug,
+              },
+            ]
+          }),
+        )
+
+        return [...boardMatches, ...columnMatches, ...rowMatches]
+      })
+      .slice(0, 80)
+  }, [boards, searchQuery])
 
   useEffect(() => {
     setCollapsed(Boolean(currentUser?.preferences?.sidebarCollapsed))
   }, [currentUser?.preferences?.sidebarCollapsed])
+
+  useEffect(() => {
+    function handlePointerDown(event) {
+      if (searchRef.current && !searchRef.current.contains(event.target)) {
+        setShowSearchResults(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handlePointerDown)
+    return () => document.removeEventListener('mousedown', handlePointerDown)
+  }, [])
 
   async function handleLogout() {
     await logout()
     navigate('/', { replace: true })
   }
 
-  async function handleNotificationClick(notification) {
-    await markNotificationRead(notification.id)
-    setShowNotifications(false)
-    navigate(notification.link)
-  }
-
   async function handleAcceptBoardShare(notificationId) {
     await acceptBoardShare(notificationId)
     setShowNotifications(false)
     navigate('/app/boards')
-  }
-
-  async function handleDeleteNotification(event, notificationId) {
-    event.stopPropagation()
-    await deleteNotification(notificationId)
   }
 
   async function handleNotificationGroupClick(group) {
@@ -133,6 +196,12 @@ function AppLayout() {
     })
   }
 
+  function handleSearchResultClick(result) {
+    setShowSearchResults(false)
+    setSearchQuery('')
+    navigate(`/app/boards/${result.boardSlug}`)
+  }
+
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-900">
       <Sidebar collapsed={collapsed} mobileOpen={mobileNavOpen} onCloseMobile={() => setMobileNavOpen(false)} />
@@ -150,12 +219,63 @@ function AppLayout() {
                 {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
               </button>
 
-              <div className="flex min-w-0 w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-soft sm:max-w-xl">
-                <Search size={16} className="text-slate-400" />
-                <input
-                  className="w-full min-w-0 border-none bg-transparent text-sm text-slate-700 outline-none"
-                  placeholder={`Search in ${shellData.workspaceName}...`}
-                />
+              <div ref={searchRef} className="relative flex min-w-0 w-full sm:max-w-xl">
+                <div className="flex min-w-0 w-full items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-soft">
+                  <Search size={16} className="text-slate-400" />
+                  <input
+                    className="w-full min-w-0 border-none bg-transparent text-sm text-slate-700 outline-none"
+                    placeholder={`Search across ${shellData.workspaceName}...`}
+                    value={searchQuery}
+                    onChange={(event) => {
+                      setSearchQuery(event.target.value)
+                      setShowSearchResults(true)
+                    }}
+                    onFocus={() => {
+                      if (searchQuery.trim()) setShowSearchResults(true)
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Escape') {
+                        setShowSearchResults(false)
+                      }
+                    }}
+                  />
+                </div>
+                {showSearchResults && searchQuery.trim() && (
+                  <div className="absolute left-0 top-14 z-30 w-full overflow-hidden rounded-[1.25rem] border border-slate-200 bg-white shadow-[0_20px_60px_rgba(15,23,42,0.18)]">
+                    <div className="border-b border-slate-200 px-4 py-3">
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                        {globalSearchResults.length} matches
+                      </p>
+                    </div>
+                    <div className="max-h-[420px] overflow-y-auto">
+                      {globalSearchResults.length === 0 ? (
+                        <div className="px-4 py-6 text-sm text-slate-500">
+                          No matches found across boards, columns, or row values.
+                        </div>
+                      ) : (
+                        globalSearchResults.map((result) => (
+                          <button
+                            key={result.id}
+                            type="button"
+                            onClick={() => handleSearchResultClick(result)}
+                            className="flex w-full items-start justify-between gap-3 border-b border-slate-100 px-4 py-3 text-left transition hover:bg-slate-50"
+                          >
+                            <div className="min-w-0 flex-1">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <p className="text-sm font-semibold text-slate-900">{result.title}</p>
+                                <span className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[11px] font-semibold text-slate-500">
+                                  {result.type}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-sm text-slate-600">{result.subtitle}</p>
+                            </div>
+                            <span className="whitespace-nowrap pt-0.5 text-[11px] text-slate-400">{result.meta}</span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

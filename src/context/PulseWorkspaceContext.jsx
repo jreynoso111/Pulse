@@ -1,437 +1,134 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import { initialWorkspace } from '../data/pulseWorkspace'
 import { supabase } from '../lib/supabaseClient'
+import { accentThemes, defaultSettings } from './pulseWorkspaceConfig'
+import {
+  automationToRecord,
+  boardToRecord,
+  canAccessBoard,
+  clone,
+  createStableId,
+  createBoardTemplate,
+  ensureUniqueSlug,
+  formatDateKey,
+  getBoardPermission,
+  getDefaultGroupByKey,
+  hasColumnStructureChanges,
+  getRecentDateKeys,
+  getRecentWeekKeys,
+  getTimelineValue,
+  mapAutomationRecord,
+  mapBoardRecord,
+  mapNotificationRecord,
+  mergeSettings,
+} from './pulseWorkspaceUtils'
 
 const PulseWorkspaceContext = createContext(null)
+const AUTOMATION_NOTIFICATION_TYPE = 'automation'
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
-const defaultSettings = {
-  timezone: 'America/Mexico_City',
-  locale: 'en-US',
-  defaultBoardView: 'table',
-  boardViews: {},
-  notificationsEnabled: true,
-  dashboardRefreshSeconds: 30,
-  homePage: 'dashboard',
-  density: 'comfortable',
-  themeAccent: 'blue',
-  sidebarCollapsed: false,
-}
+function parseAutomationDate(value) {
+  if (value == null || value === '') return null
 
-const accentThemes = {
-  blue: {
-    accent: '#2563eb',
-    accentSoft: '#dbeafe',
-    accentContrast: '#eff6ff',
-    appBg: '#eef4ff',
-    appBgSoft: '#f8fbff',
-    surface: '#ffffff',
-    surfaceMuted: '#f4f8ff',
-    border: '#c9ddff',
-    textPrimary: '#0f172a',
-    textSecondary: '#47607f',
-  },
-  amber: {
-    accent: '#d97706',
-    accentSoft: '#fef3c7',
-    accentContrast: '#fffbeb',
-    appBg: '#fff5e8',
-    appBgSoft: '#fffaf2',
-    surface: '#fffdf8',
-    surfaceMuted: '#fff7e6',
-    border: '#f3d3a2',
-    textPrimary: '#3b2410',
-    textSecondary: '#7c5a32',
-  },
-  emerald: {
-    accent: '#059669',
-    accentSoft: '#d1fae5',
-    accentContrast: '#ecfdf5',
-    appBg: '#ebfaf4',
-    appBgSoft: '#f5fdf9',
-    surface: '#fbfffd',
-    surfaceMuted: '#eefcf5',
-    border: '#b7ebd4',
-    textPrimary: '#10261f',
-    textSecondary: '#47675b',
-  },
-  rose: {
-    accent: '#e11d48',
-    accentSoft: '#ffe4e6',
-    accentContrast: '#fff1f2',
-    appBg: '#fff0f3',
-    appBgSoft: '#fff8f9',
-    surface: '#fffdfd',
-    surfaceMuted: '#fff2f4',
-    border: '#f7c8d1',
-    textPrimary: '#32121b',
-    textSecondary: '#7b4a57',
-  },
-  indigo: {
-    accent: '#4f46e5',
-    accentSoft: '#e0e7ff',
-    accentContrast: '#eef2ff',
-    appBg: '#eef2ff',
-    appBgSoft: '#f8faff',
-    surface: '#ffffff',
-    surfaceMuted: '#eef2ff',
-    border: '#c7d2fe',
-    textPrimary: '#1e1b4b',
-    textSecondary: '#5b5ea6',
-  },
-  teal: {
-    accent: '#0f766e',
-    accentSoft: '#ccfbf1',
-    accentContrast: '#f0fdfa',
-    appBg: '#e6fffb',
-    appBgSoft: '#f4fffd',
-    surface: '#fbfffe',
-    surfaceMuted: '#e8fbf7',
-    border: '#99f6e4',
-    textPrimary: '#102a27',
-    textSecondary: '#41756f',
-  },
-  coral: {
-    accent: '#ea580c',
-    accentSoft: '#ffedd5',
-    accentContrast: '#fff7ed',
-    appBg: '#fff1e8',
-    appBgSoft: '#fff8f4',
-    surface: '#fffefd',
-    surfaceMuted: '#fff3ea',
-    border: '#fdba74',
-    textPrimary: '#3a1d10',
-    textSecondary: '#8a583c',
-  },
-  violet: {
-    accent: '#7c3aed',
-    accentSoft: '#ede9fe',
-    accentContrast: '#f5f3ff',
-    appBg: '#f3efff',
-    appBgSoft: '#faf8ff',
-    surface: '#ffffff',
-    surfaceMuted: '#f3efff',
-    border: '#d8b4fe',
-    textPrimary: '#2e1065',
-    textSecondary: '#6b46a9',
-  },
-  lime: {
-    accent: '#65a30d',
-    accentSoft: '#ecfccb',
-    accentContrast: '#f7fee7',
-    appBg: '#f6ffe8',
-    appBgSoft: '#fbfff3',
-    surface: '#fefff9',
-    surfaceMuted: '#f3fbdc',
-    border: '#bef264',
-    textPrimary: '#24340d',
-    textSecondary: '#627244',
-  },
-  copper: {
-    accent: '#b45309',
-    accentSoft: '#fde6d3',
-    accentContrast: '#fff7f1',
-    appBg: '#fff3ea',
-    appBgSoft: '#fff9f5',
-    surface: '#fffefd',
-    surfaceMuted: '#fff1e4',
-    border: '#f5c39d',
-    textPrimary: '#3a2214',
-    textSecondary: '#82593e',
-  },
-  slate: {
-    accent: '#334155',
-    accentSoft: '#e2e8f0',
-    accentContrast: '#f8fafc',
-    appBg: '#eef2f6',
-    appBgSoft: '#f8fafc',
-    surface: '#ffffff',
-    surfaceMuted: '#f1f5f9',
-    border: '#d5dde7',
-    textPrimary: '#111827',
-    textSecondary: '#526071',
-  },
-  'blue-inverted': {
-    accent: '#bfdbfe',
-    accentSoft: '#1d4ed8',
-    accentContrast: '#0f172a',
-    appBg: '#0f172a',
-    appBgSoft: '#162033',
-    surface: '#111c2e',
-    surfaceMuted: '#1b2a43',
-    border: '#27476f',
-    textPrimary: '#eff6ff',
-    textSecondary: '#bfd6f6',
-  },
-  'emerald-inverted': {
-    accent: '#a7f3d0',
-    accentSoft: '#047857',
-    accentContrast: '#081c15',
-    appBg: '#081c15',
-    appBgSoft: '#0d261d',
-    surface: '#102b22',
-    surfaceMuted: '#15352a',
-    border: '#225244',
-    textPrimary: '#ecfdf5',
-    textSecondary: '#b7e9d1',
-  },
-  'rose-inverted': {
-    accent: '#fecdd3',
-    accentSoft: '#be123c',
-    accentContrast: '#2a0d15',
-    appBg: '#2a0d15',
-    appBgSoft: '#34111b',
-    surface: '#3f1621',
-    surfaceMuted: '#4a1d2a',
-    border: '#733049',
-    textPrimary: '#fff1f2',
-    textSecondary: '#f6c5cf',
-  },
-  'slate-inverted': {
-    accent: '#cbd5e1',
-    accentSoft: '#475569',
-    accentContrast: '#0f172a',
-    appBg: '#020617',
-    appBgSoft: '#0b1220',
-    surface: '#111827',
-    surfaceMuted: '#182235',
-    border: '#334155',
-    textPrimary: '#f8fafc',
-    textSecondary: '#cbd5e1',
-  },
-}
-
-function clone(value) {
-  return JSON.parse(JSON.stringify(value))
-}
-
-function slugify(value) {
-  return String(value)
-    .toLowerCase()
-    .trim()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-}
-
-function ensureUniqueSlug(name, existingBoards, excludedBoardId) {
-  const baseSlug = slugify(name) || `board-${Date.now()}`
-  const existingSlugs = new Set(
-    existingBoards.filter((board) => board.id !== excludedBoardId).map((board) => board.slug),
-  )
-
-  if (!existingSlugs.has(baseSlug)) return baseSlug
-
-  let suffix = 2
-  let nextSlug = `${baseSlug}-${suffix}`
-  while (existingSlugs.has(nextSlug)) {
-    suffix += 1
-    nextSlug = `${baseSlug}-${suffix}`
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value
   }
 
-  return nextSlug
-}
-
-function createStableId(prefix) {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID()}`
+  const normalizedValue = typeof value === 'string' ? value.trim() : value
+  if (typeof normalizedValue === 'string' && DATE_ONLY_PATTERN.test(normalizedValue)) {
+    const [year, month, day] = normalizedValue.split('-').map(Number)
+    return new Date(year, month - 1, day)
   }
 
-  return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const parsed = new Date(normalizedValue)
+  return Number.isNaN(parsed.getTime()) ? null : parsed
 }
 
-function ensureUniqueItemIds(items = []) {
-  const seenIds = new Set()
+function normalizeAutomationValue(value, columnType) {
+  if (value == null || value === '') return null
 
-  return items.map((item) => {
-    const nextId = item.id && !seenIds.has(item.id) ? item.id : createStableId('item')
-    seenIds.add(nextId)
-    return {
-      ...item,
-      id: nextId,
-    }
-  })
+  if (columnType === 'number' || columnType === 'currency') {
+    const parsed = Number(value)
+    return Number.isNaN(parsed) ? null : parsed
+  }
+
+  if (columnType === 'boolean') {
+    return value === true || value === 'true'
+  }
+
+  if (columnType === 'date') {
+    return parseAutomationDate(value)?.getTime() ?? null
+  }
+
+  return String(value).trim().toLowerCase()
 }
 
-function formatDateKey(value) {
-  return new Date(value).toISOString().slice(0, 10)
+function matchesAutomationRule(item, board, config) {
+  const targetColumn = board.columns.find((column) => column.key === config.columnKey)
+  if (!targetColumn) return false
+
+  if (config.operator === 'date_passed') {
+    const rawValue = item[config.columnKey]
+    if (!rawValue) return false
+    const today = new Date()
+    today.setHours(0, 0, 0, 0)
+    const valueDate = parseAutomationDate(rawValue)
+    if (!valueDate) return false
+    valueDate.setHours(0, 0, 0, 0)
+    return valueDate.getTime() < today.getTime()
+  }
+
+  const left = normalizeAutomationValue(item[config.columnKey], targetColumn.type)
+  const right = normalizeAutomationValue(config.value, targetColumn.type)
+  const secondary = normalizeAutomationValue(config.secondaryValue, targetColumn.type)
+
+  switch (config.operator) {
+    case 'equals':
+      return left === right
+    case 'not_equals':
+      return left !== right
+    case 'contains':
+      return left != null && String(left).includes(String(right ?? ''))
+    case 'greater_than':
+      return left != null && right != null && left > right
+    case 'less_than':
+      return left != null && right != null && left < right
+    case 'is_empty':
+      return item[config.columnKey] == null || item[config.columnKey] === ''
+    case 'is_not_empty':
+      return item[config.columnKey] != null && item[config.columnKey] !== ''
+    case 'between':
+      return left != null && right != null && secondary != null && left >= right && left <= secondary
+    default:
+      return false
+  }
 }
 
-function getTimelineValue(item) {
-  return item.due_date || item.start_date || item.work_date || item.last_updated || new Date().toISOString()
-}
-
-function getRecentDateKeys(items, totalDays) {
-  const latestTimestamp = items.reduce((latest, item) => {
-    const current = new Date(getTimelineValue(item)).getTime()
-    return Number.isNaN(current) ? latest : Math.max(latest, current)
-  }, Date.now())
-
-  return Array.from({ length: totalDays }, (_, index) => {
-    const date = new Date(latestTimestamp)
-    date.setDate(date.getDate() - (totalDays - index - 1))
-    return formatDateKey(date)
-  })
-}
-
-function getRecentWeekKeys(items, totalWeeks) {
-  const latestTimestamp = items.reduce((latest, item) => {
-    const current = new Date(getTimelineValue(item)).getTime()
-    return Number.isNaN(current) ? latest : Math.max(latest, current)
-  }, Date.now())
-
-  return Array.from({ length: totalWeeks }, (_, index) => {
-    const date = new Date(latestTimestamp)
-    date.setDate(date.getDate() - index * 7)
-    const start = new Date(date)
-    start.setDate(date.getDate() - date.getDay())
-    return formatDateKey(start)
-  }).reverse()
-}
-
-function createBoardTemplate(name, slug, preferredView, currentUser) {
-  const boardId = createStableId('board')
+function buildAutomationNotificationPayload(automation, board, item) {
+  const ruleConfig = automation.config || {}
+  const column = board.columns.find((entry) => entry.key === ruleConfig.columnKey)
+  const value = column ? item[column.key] : ''
+  const signature = [automation.id, board.id, item.id, ruleConfig.columnKey, ruleConfig.operator, String(value)].join('::')
 
   return {
-    id: boardId,
-    slug,
-    name,
-    description: 'New work board for planning, ownership, and status tracking.',
-    preferredView,
-    kanbanGroupBy: 'status',
-    kanbanCardFields: ['owner', 'due_date', 'priority'],
-    ownerUserId: currentUser.id,
-    ownerEmail: currentUser.email,
-    sharedWith: [],
-    columns: [
-      { id: `${boardId}-name`, key: 'name', label: 'Task', type: 'text', position: 1, minWidth: 240 },
-      { id: `${boardId}-category`, key: 'category', label: 'Category', type: 'text', position: 2, minWidth: 170 },
-      { id: `${boardId}-status`, key: 'status', label: 'Status', type: 'status', statusOptions: ['Working on it', 'Stuck', 'Done'], position: 3, minWidth: 160 },
-      { id: `${boardId}-start`, key: 'start_date', label: 'Start date', type: 'date', position: 4, minWidth: 150 },
-      { id: `${boardId}-due`, key: 'due_date', label: 'Due date', type: 'date', position: 5, minWidth: 150 },
-      { id: `${boardId}-owner`, key: 'owner', label: 'Owner', type: 'text', position: 6, minWidth: 180 },
-      { id: `${boardId}-priority`, key: 'priority', label: 'Priority', type: 'text', position: 7, minWidth: 140 },
-    ],
-    items: [
-      {
-        id: createStableId(`${boardId}-item`),
-        name: `${name} kickoff`,
-        category: 'General',
-        status: 'Working on it',
-        start_date: formatDateKey(new Date()),
-        due_date: formatDateKey(new Date(Date.now() + 1000 * 60 * 60 * 24 * 5)),
-        owner: currentUser.name,
-        priority: 'Medium',
-      },
-    ],
-  }
-}
-
-function getBoardPermission(board, currentUserId) {
-  if (!board || !currentUserId) return null
-  if ((board.deletedFor || []).some((entry) => entry.userId === currentUserId)) return null
-  if (board.ownerUserId === currentUserId) return 'owner'
-  const sharedEntry = board.sharedWith.find((entry) => entry.userId === currentUserId)
-  if (!sharedEntry?.accepted) return null
-  return sharedEntry.permission || null
-}
-
-function canAccessBoard(board, currentUserId) {
-  return Boolean(getBoardPermission(board, currentUserId))
-}
-
-function getDefaultGroupByKey(board) {
-  return board.columns.find((column) => column.key === 'category')?.key || ''
-}
-
-function mergeSettings(settings) {
-  return {
-    ...defaultSettings,
-    ...(settings || {}),
-    boardViews: settings?.boardViews || {},
-  }
-}
-
-function mapBoardRecord(record, workspaceUsersById) {
-  const owner = workspaceUsersById.get(record.owner_user_id)
-
-  return {
-    id: record.id,
-    slug: record.slug,
-    name: record.name,
-    description: record.description,
-    preferredView: record.preferred_view,
-    kanbanGroupBy: record.kanban_group_by,
-    kanbanCardFields: record.kanban_card_fields || [],
-    ownerUserId: record.owner_user_id,
-    ownerEmail: owner?.email || '',
-    sharedWith: (record.shared_with || []).map((entry) => ({
-      userId: entry.userId,
-      email: entry.email || workspaceUsersById.get(entry.userId)?.email || '',
-      permission: entry.permission || 'view',
-      accepted: entry.accepted === true,
-      viewColumns: Array.isArray(entry.viewColumns) ? entry.viewColumns : [],
-    })),
-    deletedFor: (record.deleted_for || []).map((entry) => ({
-      userId: entry.userId,
-      deletedAt: entry.deletedAt,
-    })),
-    deleteAfter: record.delete_after,
-    columns: record.columns || [],
-    items: ensureUniqueItemIds(record.items || []),
-  }
-}
-
-function mapAutomationRecord(record) {
-  return {
-    id: record.id,
-    name: record.name,
-    description: record.description,
-    triggerType: record.trigger_type,
-    actionType: record.action_type,
-    enabled: record.enabled,
-    lastRunAt: record.last_run_at,
-    nextRunAt: record.next_run_at,
-  }
-}
-
-function mapNotificationRecord(record) {
-  return {
-    id: record.id,
-    userId: record.user_id,
-    title: record.title,
-    description: record.description,
-    link: record.link,
-    type: record.type,
-    meta: record.meta || {},
-    createdAt: record.created_at,
-    read: record.read,
-  }
-}
-
-function boardToRecord(board, workspaceId) {
-  return {
-    id: board.id,
-    workspace_id: workspaceId,
-    slug: board.slug,
-    name: board.name,
-    description: board.description || '',
-    preferred_view: board.preferredView || 'table',
-    kanban_group_by: board.kanbanGroupBy || 'status',
-    kanban_card_fields: board.kanbanCardFields || [],
-    owner_user_id: board.ownerUserId,
-    columns: board.columns || [],
-    items: ensureUniqueItemIds(board.items || []),
-    shared_with: (board.sharedWith || []).map((entry) => ({
-      userId: entry.userId,
-      email: entry.email,
-      permission: entry.permission,
-      accepted: entry.accepted === true,
-      viewColumns: Array.isArray(entry.viewColumns) ? entry.viewColumns : [],
-    })),
-    deleted_for: (board.deletedFor || []).map((entry) => ({
-      userId: entry.userId,
-      deletedAt: entry.deletedAt,
-    })),
-    delete_after: board.deleteAfter || null,
+    title: automation.name,
+    description:
+      automation.config?.message?.trim() ||
+      `${item.name || 'A row'} matched the automation rule on ${board.name}.`,
+    link: `/app/boards/${board.slug}`,
+    type: AUTOMATION_NOTIFICATION_TYPE,
+    meta: {
+      automationId: automation.id,
+      automationSignature: signature,
+      boardId: board.id,
+      boardName: board.name,
+      rowId: item.id,
+      rowName: item.name || '',
+      columnKey: ruleConfig.columnKey || '',
+      columnLabel: column?.label || '',
+      operator: ruleConfig.operator || '',
+      value,
+    },
   }
 }
 
@@ -524,7 +221,11 @@ export function PulseWorkspaceProvider({ children }) {
       supabase.from('pulse_profiles').select('*').eq('workspace_id', profile.workspace_id).order('name'),
       supabase.from('pulse_boards').select('*').eq('workspace_id', profile.workspace_id).order('created_at'),
       supabase.from('pulse_automations').select('*').eq('workspace_id', profile.workspace_id).order('created_at'),
-      supabase.from('pulse_notifications').select('*').order('created_at', { ascending: false }),
+      supabase
+        .from('pulse_notifications')
+        .select('*')
+        .eq('user_id', session.user.id)
+        .order('created_at', { ascending: false }),
       supabase.from('pulse_board_view_preferences').select('*').eq('user_id', session.user.id),
     ])
 
@@ -568,7 +269,11 @@ export function PulseWorkspaceProvider({ children }) {
     )
     setAllBoards((boardRows || []).map((board) => mapBoardRecord(board, usersById)))
     setAutomations((automationRows || []).map(mapAutomationRecord))
-    setNotifications((notificationRows || []).map(mapNotificationRecord))
+    setNotifications(
+      (notificationRows || [])
+        .filter((notification) => notification.user_id === session.user.id)
+        .map(mapNotificationRecord),
+    )
     setBoardViewPreferences(
       Object.fromEntries((boardPreferenceRows || []).map((row) => [row.board_id, row.preferences || {}])),
     )
@@ -628,6 +333,16 @@ export function PulseWorkspaceProvider({ children }) {
         .sort((left, right) => new Date(right.createdAt).getTime() - new Date(left.createdAt).getTime()),
     [userNotifications],
   )
+  const visibleAutomations = useMemo(
+    () =>
+      automations.filter(
+        (automation) =>
+          !automation.targetUserId ||
+          automation.targetUserId === currentUserId ||
+          automation.createdByUserId === currentUserId,
+      ),
+    [automations, currentUserId],
+  )
   const unreadNotificationsCount = useMemo(
     () => currentUserNotifications.filter((notification) => !notification.read).length,
     [currentUserNotifications],
@@ -642,7 +357,7 @@ export function PulseWorkspaceProvider({ children }) {
     const totalItems = allItems.length
     const completedItems = allItems.filter((item) => item.status === 'Done' || item.shipment_status === 'Done').length
     const blockedItems = allItems.filter((item) => item.status === 'Stuck' || item.shipment_status === 'Stuck' || item.blocked).length
-    const activeAutomations = automations.filter((automation) => automation.enabled).length
+    const activeAutomations = visibleAutomations.filter((automation) => automation.enabled).length
     const recentDays = getRecentDateKeys(allItems, 7)
     const recentWeeks = getRecentWeekKeys(allItems, 6)
 
@@ -706,7 +421,7 @@ export function PulseWorkspaceProvider({ children }) {
       trendData,
       pieData,
     }
-  }, [allItems, automations])
+  }, [allItems, visibleAutomations])
 
   const shellData = useMemo(
     () => ({
@@ -730,6 +445,99 @@ export function PulseWorkspaceProvider({ children }) {
     return board
   }
 
+  const evaluateNotificationAutomations = useCallback(
+    async (candidateAutomations = automations, candidateBoards = boards) => {
+      if (!currentUserId) return
+
+      const enabledNotificationAutomations = (candidateAutomations || []).filter(
+        (automation) => automation.enabled && automation.actionType === 'Notification' && automation.targetUserId === currentUserId,
+      )
+      if (enabledNotificationAutomations.length === 0) return
+
+      const existingSignatures = new Set(
+        notifications
+          .filter((notification) => notification.type === AUTOMATION_NOTIFICATION_TYPE)
+          .map((notification) => notification.meta?.automationSignature)
+          .filter(Boolean),
+      )
+
+      const pendingNotifications = []
+      const touchedAutomationIds = new Set()
+
+      enabledNotificationAutomations.forEach((automation) => {
+        const scopedBoards =
+          automation.config?.boardScope === 'single' && automation.config?.boardId
+            ? candidateBoards.filter((board) => board.id === automation.config.boardId)
+            : candidateBoards
+
+        scopedBoards.forEach((board) => {
+          board.items.forEach((item) => {
+            if (!matchesAutomationRule(item, board, automation.config || {})) return
+
+            const nextNotification = buildAutomationNotificationPayload(automation, board, item)
+            const signature = nextNotification.meta.automationSignature
+            if (existingSignatures.has(signature)) return
+
+            existingSignatures.add(signature)
+            pendingNotifications.push({
+              user_id: currentUserId,
+              ...nextNotification,
+            })
+            touchedAutomationIds.add(automation.id)
+          })
+        })
+      })
+
+      if (pendingNotifications.length === 0) return
+
+      const timestamp = new Date().toISOString()
+      const { data: insertedNotifications, error: insertError } = await supabase
+        .from('pulse_notifications')
+        .insert(pendingNotifications)
+        .select('*')
+
+      if (insertError) throw insertError
+
+      if (touchedAutomationIds.size > 0) {
+        const { error: automationUpdateError } = await supabase
+          .from('pulse_automations')
+          .update({ last_run_at: timestamp })
+          .in('id', Array.from(touchedAutomationIds))
+
+        if (automationUpdateError) throw automationUpdateError
+      }
+
+      if (insertedNotifications?.length) {
+        setNotifications((current) => [
+          ...insertedNotifications.map(mapNotificationRecord),
+          ...current,
+        ])
+      }
+
+      if (touchedAutomationIds.size > 0) {
+        setAutomations((current) =>
+          current.map((automation) =>
+            touchedAutomationIds.has(automation.id)
+              ? {
+                  ...automation,
+                  lastRunAt: timestamp,
+                }
+              : automation,
+          ),
+        )
+      }
+    },
+    [automations, boards, currentUserId, notifications],
+  )
+
+  useEffect(() => {
+    if (!currentUserId || !boards.length || !automations.length) return
+
+    evaluateNotificationAutomations().catch((error) => {
+      console.error('Failed to evaluate notification automations.', error)
+    })
+  }, [automations, boards, currentUserId, evaluateNotificationAutomations])
+
   const value = useMemo(
     () => ({
       authReady,
@@ -741,7 +549,7 @@ export function PulseWorkspaceProvider({ children }) {
       settings,
       boards,
       workspaceUsers,
-      automations,
+      automations: visibleAutomations,
       notifications: currentUserNotifications,
       unreadNotificationsCount,
       shellData,
@@ -791,6 +599,7 @@ export function PulseWorkspaceProvider({ children }) {
       async updateUserPreferences(updates) {
         if (!currentUserId) return
 
+        const previousSettings = clone(settings)
         const nextSettings = {
           ...settings,
           ...updates,
@@ -799,12 +608,18 @@ export function PulseWorkspaceProvider({ children }) {
         setSettings(nextSettings)
         setCurrentUserProfile((current) => (current ? { ...current } : current))
 
-        const { error } = await supabase.from('pulse_user_preferences').upsert({
-          user_id: currentUserId,
-          settings: nextSettings,
-        })
+        try {
+          const { error } = await supabase.from('pulse_user_preferences').upsert({
+            user_id: currentUserId,
+            settings: nextSettings,
+          })
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setSettings(previousSettings)
+          setCurrentUserProfile((current) => (current ? { ...current } : current))
+          throw error
+        }
       },
       async updateCurrentUserProfile(updates) {
         if (!currentUserId) return
@@ -816,24 +631,15 @@ export function PulseWorkspaceProvider({ children }) {
           throw new Error('Name and email are required.')
         }
 
-        const { error: authError } = await supabase.auth.updateUser({
-          email: nextEmail !== currentUser?.email ? nextEmail : undefined,
-          data: {
-            full_name: nextName,
+        const { data, error } = await supabase.functions.invoke('pulse-update-profile', {
+          body: {
+            name: nextName,
+            email: nextEmail,
           },
         })
 
-        if (authError) throw new Error(authError.message)
-
-        const { error: profileError } = await supabase
-          .from('pulse_profiles')
-          .update({
-            name: nextName,
-            email: nextEmail,
-          })
-          .eq('id', currentUserId)
-
-        if (profileError) throw new Error(profileError.message)
+        if (error) throw new Error(error.message || 'Unable to update profile.')
+        if (data?.error) throw new Error(data.error)
 
         setCurrentUserProfile((current) =>
           current
@@ -885,6 +691,19 @@ export function PulseWorkspaceProvider({ children }) {
       async updateBoard(boardId, nextBoard) {
         const previousBoard = allBoards.find((board) => board.id === boardId)
         if (!previousBoard) return null
+        const boardPermission = getBoardPermission(previousBoard, currentUserId)
+
+        if (!boardPermission) {
+          throw new Error('You do not have permission to update this board.')
+        }
+
+        if (
+          nextBoard?.columns &&
+          boardPermission !== 'owner' &&
+          hasColumnStructureChanges(previousBoard.columns, nextBoard.columns)
+        ) {
+          throw new Error('Only the board owner can add or remove columns.')
+        }
 
         const requestedName = typeof nextBoard.name === 'string' ? nextBoard.name.trim() : ''
         const mergedBoard = {
@@ -904,6 +723,9 @@ export function PulseWorkspaceProvider({ children }) {
       async deleteBoard(boardId) {
         const board = allBoards.find((entry) => entry.id === boardId)
         if (!board || !currentUser) return
+        if (getBoardPermission(board, currentUserId) !== 'owner') {
+          throw new Error('Only the board owner can delete this board.')
+        }
         const { error } = await supabase.rpc('pulse_delete_board', {
           target_board_id: boardId,
         })
@@ -997,7 +819,16 @@ export function PulseWorkspaceProvider({ children }) {
             typeof storedPreferences.groupByKey === 'string'
               ? storedPreferences.groupByKey
               : getDefaultGroupByKey(board),
+          secondaryGroupByKey:
+            typeof storedPreferences.secondaryGroupByKey === 'string' ? storedPreferences.secondaryGroupByKey : '',
+          sortConfig:
+            storedPreferences.sortConfig &&
+            typeof storedPreferences.sortConfig.columnKey === 'string' &&
+            typeof storedPreferences.sortConfig.direction === 'string'
+              ? storedPreferences.sortConfig
+              : null,
           groupedSectionCollapsedByField: storedPreferences.groupedSectionCollapsedByField || {},
+          groupedSectionOrderByField: storedPreferences.groupedSectionOrderByField || {},
           ganttGroupByKey:
             typeof storedPreferences.ganttGroupByKey === 'string' ? storedPreferences.ganttGroupByKey : '',
           ganttStartKey:
@@ -1009,11 +840,13 @@ export function PulseWorkspaceProvider({ children }) {
           kanbanCardFields: storedPreferences.kanbanCardFields || board.kanbanCardFields || [],
           kanbanCollapsedLaneIdsByField: storedPreferences.kanbanCollapsedLaneIdsByField || {},
           kanbanLaneSortDirectionByField: storedPreferences.kanbanLaneSortDirectionByField || {},
+          conditionalFormattingRules: storedPreferences.conditionalFormattingRules || [],
           columnPreferences: storedPreferences.columnPreferences || {},
           textSize: storedPreferences.textSize || 'medium',
         }
       },
       async updateBoardViewPreferences(boardId, updates) {
+        const previousPreferences = clone(boardViewPreferences)
         const existingPreferences = boardViewPreferences[boardId] || {}
         const nextPreferences = {
           ...existingPreferences,
@@ -1025,54 +858,80 @@ export function PulseWorkspaceProvider({ children }) {
           [boardId]: nextPreferences,
         }))
 
-        const { error } = await supabase.from('pulse_board_view_preferences').upsert({
-          user_id: currentUserId,
-          board_id: boardId,
-          preferences: nextPreferences,
-        })
+        try {
+          const { error } = await supabase.from('pulse_board_view_preferences').upsert({
+            user_id: currentUserId,
+            board_id: boardId,
+            preferences: nextPreferences,
+          })
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setBoardViewPreferences(previousPreferences)
+          throw error
+        }
       },
       async markNotificationRead(notificationId) {
+        const previousNotifications = clone(notifications)
         setNotifications((current) =>
           current.map((notification) =>
             notification.id === notificationId ? { ...notification, read: true } : notification,
           ),
         )
 
-        const { error } = await supabase
-          .from('pulse_notifications')
-          .update({ read: true })
-          .eq('id', notificationId)
+        try {
+          const { error } = await supabase
+            .from('pulse_notifications')
+            .update({ read: true })
+            .eq('id', notificationId)
+            .eq('user_id', currentUserId)
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setNotifications(previousNotifications)
+          throw error
+        }
       },
       async markAllNotificationsRead() {
         const unreadIds = currentUserNotifications.filter((notification) => !notification.read).map((notification) => notification.id)
         if (unreadIds.length === 0) return
 
+        const previousNotifications = clone(notifications)
         setNotifications((current) =>
           current.map((notification) =>
             unreadIds.includes(notification.id) ? { ...notification, read: true } : notification,
           ),
         )
 
-        const { error } = await supabase
-          .from('pulse_notifications')
-          .update({ read: true })
-          .in('id', unreadIds)
+        try {
+          const { error } = await supabase
+            .from('pulse_notifications')
+            .update({ read: true })
+            .in('id', unreadIds)
+            .eq('user_id', currentUserId)
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setNotifications(previousNotifications)
+          throw error
+        }
       },
       async deleteNotification(notificationId) {
+        const previousNotifications = clone(notifications)
         setNotifications((current) => current.filter((notification) => notification.id !== notificationId))
 
-        const { error } = await supabase
-          .from('pulse_notifications')
-          .delete()
-          .eq('id', notificationId)
+        try {
+          const { error } = await supabase
+            .from('pulse_notifications')
+            .delete()
+            .eq('id', notificationId)
+            .eq('user_id', currentUserId)
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setNotifications(previousNotifications)
+          throw error
+        }
       },
       async acceptBoardShare(notificationId) {
         const targetNotification = notifications.find((notification) => notification.id === notificationId)
@@ -1091,6 +950,7 @@ export function PulseWorkspaceProvider({ children }) {
           sharedWith: nextSharedWith,
         })
 
+        const previousNotifications = clone(notifications)
         setNotifications((current) =>
           current.map((notification) =>
             notification.id === notificationId
@@ -1108,20 +968,26 @@ export function PulseWorkspaceProvider({ children }) {
           ),
         )
 
-        const { error } = await supabase
-          .from('pulse_notifications')
-          .update({
-            read: true,
-            title: 'Board added to your workspace',
-            description: 'This shared board is now available in your boards list.',
-            meta: {
-              ...targetNotification.meta,
-              accepted: true,
-            },
-          })
-          .eq('id', notificationId)
+        try {
+          const { error } = await supabase
+            .from('pulse_notifications')
+            .update({
+              read: true,
+              title: 'Board added to your workspace',
+              description: 'This shared board is now available in your boards list.',
+              meta: {
+                ...targetNotification.meta,
+                accepted: true,
+              },
+            })
+            .eq('id', notificationId)
+            .eq('user_id', currentUserId)
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setNotifications(previousNotifications)
+          throw error
+        }
 
         return updatedBoard.slug
       },
@@ -1138,21 +1004,29 @@ export function PulseWorkspaceProvider({ children }) {
           })
         }
 
+        const previousNotifications = clone(notifications)
         setNotifications((current) =>
           current.filter((notification) => notification.id !== notificationId),
         )
 
-        const { error } = await supabase
-          .from('pulse_notifications')
-          .delete()
-          .eq('id', notificationId)
+        try {
+          const { error } = await supabase
+            .from('pulse_notifications')
+            .delete()
+            .eq('id', notificationId)
+            .eq('user_id', currentUserId)
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setNotifications(previousNotifications)
+          throw error
+        }
       },
       async toggleAutomation(automationId) {
         const targetAutomation = automations.find((automation) => automation.id === automationId)
         if (!targetAutomation) return
 
+        const previousAutomations = clone(automations)
         const nextAutomation = {
           ...targetAutomation,
           enabled: !targetAutomation.enabled,
@@ -1161,18 +1035,60 @@ export function PulseWorkspaceProvider({ children }) {
           current.map((automation) => (automation.id === automationId ? nextAutomation : automation)),
         )
 
-        const { error } = await supabase
-          .from('pulse_automations')
-          .update({ enabled: nextAutomation.enabled })
-          .eq('id', automationId)
+        try {
+          const { error } = await supabase
+            .from('pulse_automations')
+            .update({ enabled: nextAutomation.enabled })
+            .eq('id', automationId)
 
-        if (error) throw error
+          if (error) throw error
+        } catch (error) {
+          setAutomations(previousAutomations)
+          throw error
+        }
+      },
+      async createAutomation(payload) {
+        if (!currentUser) throw new Error('No active user session.')
+
+        const automation = {
+          id: createStableId('auto'),
+          name: String(payload?.name || '').trim(),
+          description: String(payload?.description || '').trim(),
+          triggerType: payload?.triggerType || 'Row condition',
+          actionType: 'Notification',
+          enabled: payload?.enabled !== false,
+          lastRunAt: null,
+          nextRunAt: null,
+          targetUserId: currentUser.id,
+          createdByUserId: currentUser.id,
+          config: clone(payload?.config || {}),
+        }
+
+        if (!automation.name) {
+          throw new Error('Automation name is required.')
+        }
+
+        const previousAutomations = clone(automations)
+        setAutomations((current) => [...current, automation])
+
+        try {
+          const { error } = await supabase
+            .from('pulse_automations')
+            .insert(automationToRecord(automation, currentUser.workspaceId, currentUser.id))
+
+          if (error) throw error
+
+          await evaluateNotificationAutomations([...automations, automation], boards)
+          return automation
+        } catch (error) {
+          setAutomations(previousAutomations)
+          throw error
+        }
       },
     }),
     [
       allBoards,
       authReady,
-      automations,
       boards,
       currentUser,
       currentUserId,
@@ -1183,10 +1099,12 @@ export function PulseWorkspaceProvider({ children }) {
       settings,
       shellData,
       unreadNotificationsCount,
+      visibleAutomations,
       workspace,
       workspaceLoading,
       workspaceUsers,
       boardViewPreferences,
+      evaluateNotificationAutomations,
       loadWorkspaceData,
       workspaceError,
     ],

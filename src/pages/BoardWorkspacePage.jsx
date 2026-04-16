@@ -1,8 +1,10 @@
-import { ArrowDownToLine, ArrowLeft, ArrowUpToLine, PencilLine, Share2, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, ArrowUpToLine, FilterX, PencilLine, Search, Share2, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import BoardTable from '../components/BoardTable'
 import { usePulseWorkspace } from '../context/PulseWorkspaceContext'
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function resolveBoardColumns(boardColumns, columnPreferences, restrictedColumnKeys = []) {
   const mergedColumns = boardColumns.map((column, index) => {
@@ -45,6 +47,7 @@ function sanitizeSharedColumns(currentColumns, nextColumns) {
       label: column.label,
       type: column.type,
       statusOptions: column.statusOptions ?? currentColumn?.statusOptions,
+      statusColors: column.statusColors ?? currentColumn?.statusColors,
       position: currentColumn?.position ?? index + 1,
       minWidth: currentColumn?.minWidth ?? column.minWidth ?? 170,
     }
@@ -66,6 +69,10 @@ function normalizeHeader(value) {
     .replace(/[^a-z0-9]+/g, '')
 }
 
+function normalizeSearchText(value) {
+  return String(value ?? '').trim().toLowerCase()
+}
+
 function createImportedRowId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `item-${crypto.randomUUID()}`
@@ -84,6 +91,30 @@ function formatImportedPhone(value) {
   return `${digits.slice(0, 3)}-${digits.slice(3, 6)}-${digits.slice(6)}`
 }
 
+function parseDateValue(value) {
+  if (value == null || value === '') return null
+
+  const normalizedValue = typeof value === 'string' ? value.trim() : value
+
+  if (typeof normalizedValue === 'string' && DATE_ONLY_PATTERN.test(normalizedValue)) {
+    const [year, month, day] = normalizedValue.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  }
+
+  const date = new Date(normalizedValue)
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function formatDateKey(value) {
+  const date = parseDateValue(value)
+  if (!date) return ''
+
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
 function normalizeImportedValue(column, value) {
   if (value == null) return ''
   if (column.type === 'number' || column.type === 'currency') {
@@ -98,9 +129,8 @@ function normalizeImportedValue(column, value) {
     return formatImportedPhone(value)
   }
   if (column.type === 'date') {
-    const date = new Date(value)
-    if (Number.isNaN(date.getTime())) return String(value).trim()
-    return date.toISOString().slice(0, 10)
+    const normalizedDate = formatDateKey(value)
+    return normalizedDate || String(value).trim()
   }
   return String(value).trim()
 }
@@ -121,7 +151,8 @@ function BoardWorkspacePage() {
   const { boardSlug } = useParams()
   const [shareEmail, setShareEmail] = useState('')
   const [sharePermission, setSharePermission] = useState('view')
-  const [shareViewColumns, setShareViewColumns] = useState([])
+  const [localTableSearchQuery, setLocalTableSearchQuery] = useState('')
+  const [clearTableFiltersToken, setClearTableFiltersToken] = useState(0)
   const [editPageForm, setEditPageForm] = useState({ name: '', description: '' })
   const [showEditPageModal, setShowEditPageModal] = useState(false)
   const [showSharingModal, setShowSharingModal] = useState(false)
@@ -150,6 +181,7 @@ function BoardWorkspacePage() {
   const board = useMemo(() => boards.find((entry) => entry.slug === boardSlug) || null, [boardSlug, boards])
   const boardPermission = board ? getBoardPermission(board) : null
   const canEditBoard = boardPermission === 'owner' || boardPermission === 'edit'
+  const canManageColumns = boardPermission === 'owner'
   const canManageSharing = boardPermission === 'owner'
   const boardViewPreferences = board ? getBoardViewPreferences(board.id, board) : null
   const currentShareEntry = board?.sharedWith.find((entry) => entry.userId === currentUser?.id) || null
@@ -158,6 +190,16 @@ function BoardWorkspacePage() {
     () => (board ? resolveBoardColumns(board.columns, boardViewPreferences?.columnPreferences || {}, restrictedColumnKeys) : []),
     [board, boardViewPreferences, restrictedColumnKeys],
   )
+  const filteredBoardItems = useMemo(() => {
+    if (!board) return []
+
+    const normalizedQuery = normalizeSearchText(localTableSearchQuery)
+    if (!normalizedQuery) return board.items
+
+    return board.items.filter((item) =>
+      resolvedColumns.some((column) => normalizeSearchText(item[column.key]).includes(normalizedQuery)),
+    )
+  }, [board, localTableSearchQuery, resolvedColumns])
   const matchedUploadColumns = useMemo(() => {
     if (!board || uploadHeaders.length === 0) return []
 
@@ -194,7 +236,6 @@ function BoardWorkspacePage() {
       name: board.name || '',
       description: board.description || '',
     })
-    setShareViewColumns(board.columns.map((column) => column.key))
     setUploadBoardKey(board.columns[0]?.key || '')
   }, [board])
 
@@ -234,34 +275,9 @@ function BoardWorkspacePage() {
   async function handleShareSubmit(event) {
     event.preventDefault()
     if (!shareEmail) return
-    await shareBoard(board.id, shareEmail, sharePermission, sharePermission === 'view' ? shareViewColumns : [])
+    await shareBoard(board.id, shareEmail, sharePermission, sharePermission === 'view' ? board.columns.map((column) => column.key) : [])
     setShareEmail('')
     setSharePermission('view')
-    setShareViewColumns(board.columns.map((column) => column.key))
-  }
-
-  function handleToggleShareColumn(columnKey) {
-    setShareViewColumns((current) => {
-      if (current.includes(columnKey)) {
-        const next = current.filter((key) => key !== columnKey)
-        return next.length ? next : current
-      }
-
-      return [...current, columnKey]
-    })
-  }
-
-  function moveShareColumn(columnKey, direction) {
-    setShareViewColumns((current) => {
-      const currentIndex = current.indexOf(columnKey)
-      if (currentIndex < 0) return current
-      const targetIndex = direction === 'up' ? currentIndex - 1 : currentIndex + 1
-      if (targetIndex < 0 || targetIndex >= current.length) return current
-      const next = [...current]
-      const [movedKey] = next.splice(currentIndex, 1)
-      next.splice(targetIndex, 0, movedKey)
-      return next
-    })
   }
 
   async function handleEditPageSubmit(event) {
@@ -437,8 +453,31 @@ function BoardWorkspacePage() {
             <ArrowLeft size={16} />
             All boards
           </Link>
-          <div>
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:gap-4">
             <h1 className="break-words text-3xl font-semibold tracking-tight text-slate-900">{board.name}</h1>
+            <div className="flex w-full max-w-3xl flex-col gap-2 sm:flex-row">
+              <div className="flex w-full max-w-lg items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-soft">
+                <Search size={16} className="text-slate-400" />
+                <input
+                  type="search"
+                  value={localTableSearchQuery}
+                  onChange={(event) => setLocalTableSearchQuery(event.target.value)}
+                  className="w-full min-w-0 border-none bg-transparent text-sm text-slate-700 outline-none"
+                  placeholder="Search this table only..."
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setLocalTableSearchQuery('')
+                  setClearTableFiltersToken((current) => current + 1)
+                }}
+                className="inline-flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 shadow-soft transition hover:bg-slate-50"
+              >
+                <FilterX size={16} />
+                Clear table filters
+              </button>
+            </div>
           </div>
         </div>
 
@@ -496,13 +535,17 @@ function BoardWorkspacePage() {
       <BoardTable
         key={board.id}
         columns={resolvedColumns}
-        rows={board.items}
+        rows={filteredBoardItems}
         loading={false}
         error={null}
         readOnly={!canEditBoard}
+        canManageColumns={canManageColumns}
         initialViewMode={boardViewPreferences?.preferredView || board.preferredView || settings.defaultBoardView}
         initialGroupByKey={boardViewPreferences?.groupByKey}
+        initialSecondaryGroupByKey={boardViewPreferences?.secondaryGroupByKey || ''}
+        initialSortConfig={boardViewPreferences?.sortConfig || null}
         initialGroupedSectionCollapsedByField={boardViewPreferences?.groupedSectionCollapsedByField || {}}
+        initialGroupedSectionOrderByField={boardViewPreferences?.groupedSectionOrderByField || {}}
         initialGanttGroupByKey={boardViewPreferences?.ganttGroupByKey || ''}
         initialGanttStartKey={boardViewPreferences?.ganttStartKey || ''}
         initialGanttEndKey={boardViewPreferences?.ganttEndKey || ''}
@@ -511,7 +554,9 @@ function BoardWorkspacePage() {
         initialKanbanCardFields={boardViewPreferences?.kanbanCardFields || board.kanbanCardFields}
         initialKanbanCollapsedLaneIdsByField={boardViewPreferences?.kanbanCollapsedLaneIdsByField || {}}
         initialKanbanLaneSortDirectionByField={boardViewPreferences?.kanbanLaneSortDirectionByField || {}}
+        initialConditionalFormattingRules={boardViewPreferences?.conditionalFormattingRules || []}
         initialTextSize={boardViewPreferences?.textSize || 'medium'}
+        clearFiltersToken={clearTableFiltersToken}
         onDataChange={handleBoardChange}
         onViewConfigChange={(updates) => {
           updateBoardViewPreferences(board.id, updates).catch((error) => {
@@ -589,68 +634,6 @@ function BoardWorkspacePage() {
                 </button>
                 </form>
 
-                {sharePermission === 'view' && (
-                  <div className="mt-4 rounded-2xl border border-slate-200 bg-slate-50 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.22em] text-slate-500">View layout</p>
-                      <p className="mt-1 text-sm text-slate-600">
-                        Choose which columns a view-only user can see and the order they will see them in.
-                      </p>
-                    </div>
-                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold uppercase tracking-wide text-slate-600">
-                      {shareViewColumns.length} visible
-                    </span>
-                  </div>
-
-                  <div className="mt-4 space-y-2">
-                    {board.columns.map((column) => {
-                      const visibleIndex = shareViewColumns.indexOf(column.key)
-                      const isVisible = visibleIndex >= 0
-
-                      return (
-                        <div
-                          key={column.key}
-                          className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2"
-                        >
-                          <label className="flex min-w-0 flex-1 items-center gap-3">
-                            <input
-                              type="checkbox"
-                              checked={isVisible}
-                              onChange={() => handleToggleShareColumn(column.key)}
-                            />
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-medium text-slate-900">{column.label}</p>
-                              <p className="text-xs text-slate-500">{column.type}</p>
-                            </div>
-                          </label>
-                          {isVisible && (
-                            <div className="flex items-center gap-2">
-                              <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                                {visibleIndex + 1}
-                              </span>
-                              <button
-                                type="button"
-                                onClick={() => moveShareColumn(column.key, 'up')}
-                                className="rounded-full border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
-                              >
-                                Up
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => moveShareColumn(column.key, 'down')}
-                                className="rounded-full border border-slate-200 px-2 py-1 text-xs font-semibold text-slate-600 transition hover:bg-slate-50"
-                              >
-                                Down
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
-                  </div>
-                )}
               </>
             ) : (
               <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">

@@ -58,7 +58,6 @@ function App() {
   const { authReady, currentUser, isAuthenticated, settings, workspaceError, workspaceLoading } = usePulseWorkspace()
   const homePage = settings.homePage || 'dashboard'
   const mustChangePassword = currentUser?.mustChangePassword === true
-  const canAccessAutomations = currentUser?.role === 'admin'
 
   if (!authReady || (isAuthenticated && workspaceLoading)) {
     return <PageFallback />
@@ -87,10 +86,7 @@ function App() {
           <Route path="dashboard/:metricKey" element={<DashboardDetailPage />} />
           <Route path="boards" element={<BoardsPage />} />
           <Route path="boards/:boardSlug" element={<BoardWorkspacePage />} />
-          <Route
-            path="automations"
-            element={canAccessAutomations ? <AutomationsPage /> : <Navigate to="/app/dashboard" replace />}
-          />
+          <Route path="automations" element={<AutomationsPage />} />
           <Route path="settings" element={<SettingsPage />} />
         </Route>
 

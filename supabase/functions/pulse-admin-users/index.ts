@@ -16,6 +16,30 @@ function jsonResponse(body: Record<string, unknown>, status = 200) {
   })
 }
 
+function isAuthUserMissing(error: { message?: string } | null | undefined) {
+  const message = String(error?.message || '').toLowerCase()
+  return message.includes('user not found') || message.includes('not found')
+}
+
+async function rollbackProvisionedUser(supabaseAdmin: ReturnType<typeof createClient>, userId: string) {
+  const cleanupOps = await Promise.all([
+    supabaseAdmin.from('pulse_user_preferences').delete().eq('user_id', userId),
+    supabaseAdmin.from('pulse_profiles').delete().eq('id', userId),
+  ])
+
+  const cleanupError = cleanupOps.find((operation) => operation.error)?.error
+  if (cleanupError) {
+    return cleanupError.message
+  }
+
+  const { error: authDeleteError } = await supabaseAdmin.auth.admin.deleteUser(userId)
+  if (authDeleteError && !isAuthUserMissing(authDeleteError)) {
+    return authDeleteError.message
+  }
+
+  return ''
+}
+
 Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response('ok', { headers: corsHeaders })
@@ -111,51 +135,55 @@ Deno.serve(async (req) => {
           return jsonResponse({ error: 'Delete or transfer the user-owned boards before deleting this profile.' }, 400)
         }
 
-        const { data: sharedBoards, error: sharedBoardsError } = await supabaseAdmin
-          .from('pulse_boards')
-          .select('id, shared_with, deleted_for')
-          .eq('workspace_id', callerProfile.workspace_id)
+        const { error: authDisableError } = await supabaseAdmin.auth.admin.updateUserById(targetUserId, {
+          ban_duration: '876000h',
+        })
 
-        if (sharedBoardsError) {
-          return jsonResponse({ error: sharedBoardsError.message }, 400)
+        if (authDisableError && !isAuthUserMissing(authDisableError)) {
+          return jsonResponse({ error: authDisableError.message }, 400)
         }
 
-        for (const board of sharedBoards ?? []) {
-          const nextSharedWith = (board.shared_with || []).filter((entry: Record<string, unknown>) => entry.userId !== targetUserId)
-          const nextDeletedFor = (board.deleted_for || []).filter((entry: Record<string, unknown>) => entry.userId !== targetUserId)
+        const { error: cleanupError } = await supabaseAdmin.rpc('pulse_delete_workspace_user', {
+          target_user_id: targetUserId,
+          target_workspace_id: callerProfile.workspace_id,
+        })
 
-          if (nextSharedWith.length !== (board.shared_with || []).length || nextDeletedFor.length !== (board.deleted_for || []).length) {
-            const { error: boardUpdateError } = await supabaseAdmin
-              .from('pulse_boards')
-              .update({
-                shared_with: nextSharedWith,
-                deleted_for: nextDeletedFor,
-              })
-              .eq('id', board.id)
-
-            if (boardUpdateError) {
-              return jsonResponse({ error: boardUpdateError.message }, 400)
-            }
-          }
-        }
-
-        const cleanupOps = await Promise.all([
-          supabaseAdmin.from('pulse_notifications').delete().eq('user_id', targetUserId),
-          supabaseAdmin.from('pulse_board_view_preferences').delete().eq('user_id', targetUserId),
-          supabaseAdmin.from('pulse_user_preferences').delete().eq('user_id', targetUserId),
-          supabaseAdmin.from('pulse_profiles').delete().eq('id', targetUserId),
-        ])
-
-        for (const operation of cleanupOps) {
-          if (operation.error) {
-            return jsonResponse({ error: operation.error.message }, 400)
-          }
+        if (cleanupError) {
+          return jsonResponse(
+            {
+              error: 'Authentication was blocked, but workspace cleanup failed. The delete can be retried safely.',
+              details: cleanupError.message,
+            },
+            500,
+          )
         }
 
         const { error: authDeleteError } = await supabaseAdmin.auth.admin.deleteUser(targetUserId)
 
-        if (authDeleteError) {
-          return jsonResponse({ error: authDeleteError.message }, 400)
+        if (authDeleteError && !isAuthUserMissing(authDeleteError)) {
+          return jsonResponse(
+            {
+              error: 'Workspace cleanup completed, but removing the authentication record failed. The delete can be retried safely.',
+              details: authDeleteError.message,
+            },
+            500,
+          )
+        }
+
+        const { error: profileDeleteError } = await supabaseAdmin
+          .from('pulse_profiles')
+          .delete()
+          .eq('id', targetUserId)
+          .eq('workspace_id', callerProfile.workspace_id)
+
+        if (profileDeleteError) {
+          return jsonResponse(
+            {
+              error: 'Authentication record was removed, but the workspace profile could not be deleted. The delete can be retried safely.',
+              details: profileDeleteError.message,
+            },
+            500,
+          )
         }
 
         return jsonResponse({
@@ -209,6 +237,7 @@ Deno.serve(async (req) => {
     }
 
     let resolvedUserId: string | null = null
+    let provisionedAuthUser = false
 
     if (normalizedMode === 'create') {
       const { data, error } = await supabaseAdmin.auth.admin.createUser({
@@ -225,6 +254,7 @@ Deno.serve(async (req) => {
       }
 
       resolvedUserId = data.user?.id ?? null
+      provisionedAuthUser = true
     } else {
       const { data, error } = await supabaseAdmin.auth.admin.inviteUserByEmail(email, {
         data: {
@@ -237,6 +267,7 @@ Deno.serve(async (req) => {
       }
 
       resolvedUserId = data.user?.id ?? null
+      provisionedAuthUser = true
     }
 
     if (!resolvedUserId) {
@@ -262,6 +293,20 @@ Deno.serve(async (req) => {
     })
 
     if (profileError) {
+      if (provisionedAuthUser) {
+        const rollbackError = await rollbackProvisionedUser(supabaseAdmin, resolvedUserId)
+        if (rollbackError) {
+          return jsonResponse(
+            {
+              error: 'Workspace provisioning failed and auth rollback also failed. Manual cleanup is required.',
+              details: profileError.message,
+              rollbackDetails: rollbackError,
+            },
+            500,
+          )
+        }
+      }
+
       return jsonResponse({ error: profileError.message }, 400)
     }
 
@@ -282,6 +327,20 @@ Deno.serve(async (req) => {
     })
 
     if (preferencesError) {
+      if (provisionedAuthUser) {
+        const rollbackError = await rollbackProvisionedUser(supabaseAdmin, resolvedUserId)
+        if (rollbackError) {
+          return jsonResponse(
+            {
+              error: 'Workspace provisioning failed and auth rollback also failed. Manual cleanup is required.',
+              details: preferencesError.message,
+              rollbackDetails: rollbackError,
+            },
+            500,
+          )
+        }
+      }
+
       return jsonResponse({ error: preferencesError.message }, 400)
     }
 
