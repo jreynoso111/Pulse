@@ -25,6 +25,7 @@ import {
 
 const PulseWorkspaceContext = createContext(null)
 const AUTOMATION_NOTIFICATION_TYPE = 'automation'
+const MAX_USER_BOARD_HISTORY = 25
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 
 function parseAutomationDate(value) {
@@ -538,6 +539,38 @@ export function PulseWorkspaceProvider({ children }) {
     })
   }, [automations, boards, currentUserId, evaluateNotificationAutomations])
 
+  const persistBoardPreferences = useCallback(
+    async (boardId, updater) => {
+      if (!currentUserId) throw new Error('No active user session.')
+
+      const previousPreferences = clone(boardViewPreferences)
+      const existingPreferences = boardViewPreferences[boardId] || {}
+      const nextPreferences =
+        typeof updater === 'function' ? updater(existingPreferences) : { ...existingPreferences, ...updater }
+
+      setBoardViewPreferences((current) => ({
+        ...current,
+        [boardId]: nextPreferences,
+      }))
+
+      try {
+        const { error } = await supabase.from('pulse_board_view_preferences').upsert({
+          user_id: currentUserId,
+          board_id: boardId,
+          preferences: nextPreferences,
+        })
+
+        if (error) throw error
+      } catch (error) {
+        setBoardViewPreferences(previousPreferences)
+        throw error
+      }
+
+      return nextPreferences
+    },
+    [boardViewPreferences, currentUserId],
+  )
+
   const value = useMemo(
     () => ({
       authReady,
@@ -688,7 +721,7 @@ export function PulseWorkspaceProvider({ children }) {
         setAllBoards((current) => [...current, board])
         return board
       },
-      async updateBoard(boardId, nextBoard) {
+      async updateBoard(boardId, nextBoard, options = {}) {
         const previousBoard = allBoards.find((board) => board.id === boardId)
         if (!previousBoard) return null
         const boardPermission = getBoardPermission(previousBoard, currentUserId)
@@ -717,8 +750,75 @@ export function PulseWorkspaceProvider({ children }) {
           ownerUserId: previousBoard.ownerUserId,
           ownerEmail: previousBoard.ownerEmail,
         }
+        const updatedBoard = await updateBoardRecord(boardToSave)
 
-        return updateBoardRecord(boardToSave)
+        if (options?.userHistoryEntry) {
+          await persistBoardPreferences(boardId, (existingPreferences) => ({
+            ...existingPreferences,
+            undoStack: [options.userHistoryEntry, ...(existingPreferences.undoStack || [])].slice(0, MAX_USER_BOARD_HISTORY),
+            redoStack: [],
+          }))
+        }
+
+        return updatedBoard
+      },
+      async undoBoardChange(boardId) {
+        const board = allBoards.find((entry) => entry.id === boardId)
+        if (!board) return null
+
+        const boardPermission = getBoardPermission(board, currentUserId)
+        if (!boardPermission || (boardPermission !== 'owner' && boardPermission !== 'edit')) {
+          throw new Error('You do not have permission to restore this board.')
+        }
+
+        const boardPreferences = boardViewPreferences[boardId] || {}
+        const [latestChange, ...remainingChanges] = boardPreferences.undoStack || []
+        if (!latestChange?.previousState) {
+          throw new Error('There is no board change to undo.')
+        }
+
+        const restoredBoard = {
+          ...board,
+          columns: clone(latestChange.previousState.columns || board.columns || []),
+          items: clone(latestChange.previousState.items || board.items || []),
+        }
+
+        const updatedBoard = await updateBoardRecord(restoredBoard)
+        await persistBoardPreferences(boardId, (existingPreferences) => ({
+          ...existingPreferences,
+          undoStack: remainingChanges,
+          redoStack: [latestChange, ...(existingPreferences.redoStack || [])].slice(0, MAX_USER_BOARD_HISTORY),
+        }))
+        return updatedBoard
+      },
+      async redoBoardChange(boardId) {
+        const board = allBoards.find((entry) => entry.id === boardId)
+        if (!board) return null
+
+        const boardPermission = getBoardPermission(board, currentUserId)
+        if (!boardPermission || (boardPermission !== 'owner' && boardPermission !== 'edit')) {
+          throw new Error('You do not have permission to restore this board.')
+        }
+
+        const boardPreferences = boardViewPreferences[boardId] || {}
+        const [latestChange, ...remainingChanges] = boardPreferences.redoStack || []
+        if (!latestChange?.nextState) {
+          throw new Error('There is no board change to redo.')
+        }
+
+        const restoredBoard = {
+          ...board,
+          columns: clone(latestChange.nextState.columns || board.columns || []),
+          items: clone(latestChange.nextState.items || board.items || []),
+        }
+
+        const updatedBoard = await updateBoardRecord(restoredBoard)
+        await persistBoardPreferences(boardId, (existingPreferences) => ({
+          ...existingPreferences,
+          redoStack: remainingChanges,
+          undoStack: [latestChange, ...(existingPreferences.undoStack || [])].slice(0, MAX_USER_BOARD_HISTORY),
+        }))
+        return updatedBoard
       },
       async deleteBoard(boardId) {
         const board = allBoards.find((entry) => entry.id === boardId)
@@ -843,33 +943,15 @@ export function PulseWorkspaceProvider({ children }) {
           conditionalFormattingRules: storedPreferences.conditionalFormattingRules || [],
           columnPreferences: storedPreferences.columnPreferences || {},
           textSize: storedPreferences.textSize || 'medium',
+          undoStack: Array.isArray(storedPreferences.undoStack) ? storedPreferences.undoStack : [],
+          redoStack: Array.isArray(storedPreferences.redoStack) ? storedPreferences.redoStack : [],
         }
       },
       async updateBoardViewPreferences(boardId, updates) {
-        const previousPreferences = clone(boardViewPreferences)
-        const existingPreferences = boardViewPreferences[boardId] || {}
-        const nextPreferences = {
+        return persistBoardPreferences(boardId, (existingPreferences) => ({
           ...existingPreferences,
           ...updates,
-        }
-
-        setBoardViewPreferences((current) => ({
-          ...current,
-          [boardId]: nextPreferences,
         }))
-
-        try {
-          const { error } = await supabase.from('pulse_board_view_preferences').upsert({
-            user_id: currentUserId,
-            board_id: boardId,
-            preferences: nextPreferences,
-          })
-
-          if (error) throw error
-        } catch (error) {
-          setBoardViewPreferences(previousPreferences)
-          throw error
-        }
       },
       async markNotificationRead(notificationId) {
         const previousNotifications = clone(notifications)

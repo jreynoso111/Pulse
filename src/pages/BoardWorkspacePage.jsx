@@ -1,4 +1,4 @@
-import { ArrowDownToLine, ArrowLeft, ArrowUpToLine, FilterX, PencilLine, Search, Share2, Trash2 } from 'lucide-react'
+import { ArrowDownToLine, ArrowLeft, ArrowUpToLine, FilterX, PencilLine, Redo2, Search, Share2, Trash2, Undo2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom'
 import BoardTable from '../components/BoardTable'
@@ -171,9 +171,11 @@ function BoardWorkspacePage() {
     deleteBoard,
     getBoardPermission,
     getBoardViewPreferences,
+    redoBoardChange,
     removeBoardShare,
     settings,
     shareBoard,
+    undoBoardChange,
     updateBoard,
     updateBoardViewPreferences,
     workspaceUsers,
@@ -186,6 +188,8 @@ function BoardWorkspacePage() {
   const boardViewPreferences = board ? getBoardViewPreferences(board.id, board) : null
   const currentShareEntry = board?.sharedWith.find((entry) => entry.userId === currentUser?.id) || null
   const restrictedColumnKeys = boardPermission === 'view' ? currentShareEntry?.viewColumns || [] : []
+  const undoCount = boardViewPreferences?.undoStack?.length || 0
+  const redoCount = boardViewPreferences?.redoStack?.length || 0
   const resolvedColumns = useMemo(
     () => (board ? resolveBoardColumns(board.columns, boardViewPreferences?.columnPreferences || {}, restrictedColumnKeys) : []),
     [board, boardViewPreferences, restrictedColumnKeys],
@@ -258,9 +262,9 @@ function BoardWorkspacePage() {
     )
   }
 
-  function handleBoardChange(nextBoard) {
+  function handleBoardChange(nextBoard, options = {}) {
     const nextColumns = sanitizeSharedColumns(board.columns, nextBoard.columns)
-    updateBoard(board.id, { ...board, columns: nextColumns, items: nextBoard.items }).catch((error) => {
+    updateBoard(board.id, { ...board, columns: nextColumns, items: nextBoard.items }, options).catch((error) => {
       console.error('Failed to update board data.', error)
     })
   }
@@ -434,6 +438,21 @@ function BoardWorkspacePage() {
         ...board,
         columns: sanitizeSharedColumns(board.columns, nextColumns),
         items: existingRows,
+      }, {
+        userHistoryEntry: {
+          id: `import-${Date.now()}`,
+          createdAt: new Date().toISOString(),
+          title: 'Imported board data',
+          type: 'import-data',
+          previousState: {
+            columns: sanitizeSharedColumns(board.columns, board.columns),
+            items: board.items,
+          },
+          nextState: {
+            columns: sanitizeSharedColumns(board.columns, nextColumns),
+            items: existingRows,
+          },
+        },
       })
       setUploadFeedback({ inserted, updated, skipped, matched: matchedEntries.length })
       setUploadError('')
@@ -482,6 +501,34 @@ function BoardWorkspacePage() {
         </div>
 
         <div className="-mx-1 flex items-center gap-2 overflow-x-auto px-1 pb-1 xl:mx-0 xl:justify-end xl:px-0">
+          <button
+            type="button"
+            onClick={() => {
+              undoBoardChange(board.id).catch((error) => {
+                console.error('Failed to undo board change.', error)
+              })
+            }}
+            disabled={!canEditBoard || undoCount === 0}
+            className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            title={undoCount > 0 ? boardViewPreferences?.undoStack?.[0]?.title || 'Undo last change' : 'No changes to undo'}
+          >
+            <Undo2 size={15} />
+            Undo
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              redoBoardChange(board.id).catch((error) => {
+                console.error('Failed to redo board change.', error)
+              })
+            }}
+            disabled={!canEditBoard || redoCount === 0}
+            className="inline-flex shrink-0 items-center gap-2 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50"
+            title={redoCount > 0 ? boardViewPreferences?.redoStack?.[0]?.title || 'Redo last change' : 'No changes to redo'}
+          >
+            <Redo2 size={15} />
+            Redo
+          </button>
           {canEditBoard && (
             <>
               <button

@@ -150,6 +150,10 @@ function getInitials(name) {
     .toUpperCase()
 }
 
+function clone(value) {
+  return JSON.parse(JSON.stringify(value))
+}
+
 function createRowId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return `item-${crypto.randomUUID()}`
@@ -183,6 +187,32 @@ function createConditionalRuleId() {
   return `rule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
+function createBoardHistoryEntryId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return `board-history-${crypto.randomUUID()}`
+  }
+
+  return `board-history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function createUserBoardHistoryEntry({ title, type, previousColumns, previousRows, nextColumns, nextRows, description = '' }) {
+  return {
+    id: createBoardHistoryEntryId(),
+    createdAt: new Date().toISOString(),
+    title,
+    type,
+    description,
+    previousState: {
+      columns: clone(previousColumns || []),
+      items: clone(previousRows || []),
+    },
+    nextState: {
+      columns: clone(nextColumns || []),
+      items: clone(nextRows || []),
+    },
+  }
+}
+
 function formatCurrencyValue(value) {
   const amount = Number(value || 0)
   if (Number.isNaN(amount)) return '$0.00'
@@ -191,6 +221,22 @@ function formatCurrencyValue(value) {
     style: 'currency',
     currency: 'USD',
   }).format(amount)
+}
+
+function getCurrencySummary(columns = [], rows = []) {
+  const currencyColumns = columns.filter((column) => column.type === 'currency')
+  if (currencyColumns.length === 0) return ''
+
+  return currencyColumns
+    .map((column) => {
+      const total = rows.reduce((sum, row) => {
+        const amount = Number(row?.[column.key] || 0)
+        return Number.isNaN(amount) ? sum : sum + amount
+      }, 0)
+
+      return `${column.label}: ${formatCurrencyValue(total)}`
+    })
+    .join(' · ')
 }
 
 function formatPhoneNumber(value) {
@@ -1282,21 +1328,33 @@ function BoardTable({
   }, [kanbanCollapsedLaneIdsByField, kanbanGroupKey, kanbanLaneDefinitions, persistViewConfig])
 
   const pushBoardChange = useCallback(
-    (nextColumns, nextRows) => {
+    (nextColumns, nextRows, historyEntry = null) => {
       if (!onDataChange) return
-      onDataChange({ columns: nextColumns, items: nextRows })
+      onDataChange({ columns: nextColumns, items: nextRows }, historyEntry ? { userHistoryEntry: historyEntry } : {})
     },
     [onDataChange],
   )
 
   const updateCell = useCallback((rowId, columnKey, value) => {
     setBoardRows((currentRows) => {
+      const targetColumn = boardColumns.find((column) => column.key === columnKey)
       const nextRows = applyRowUpdateHistory(
         currentRows,
         currentRows.map((row) => (row.id === rowId ? { ...row, [columnKey]: value } : row)),
         boardColumns,
       )
-      pushBoardChange(boardColumns, nextRows)
+      pushBoardChange(
+        boardColumns,
+        nextRows,
+        createUserBoardHistoryEntry({
+          title: `Edited ${targetColumn?.label || columnKey}`,
+          type: 'edit-cell',
+          previousColumns: boardColumns,
+          previousRows: currentRows,
+          nextColumns: boardColumns,
+          nextRows,
+        }),
+      )
       return nextRows
     })
   }, [boardColumns, pushBoardChange])
@@ -1309,7 +1367,18 @@ function BoardTable({
           currentRows.map((row) => (row.id === rowId ? { ...row, ...updates } : row)),
           boardColumns,
         )
-        pushBoardChange(boardColumns, nextRows)
+        pushBoardChange(
+          boardColumns,
+          nextRows,
+          createUserBoardHistoryEntry({
+            title: 'Updated row values',
+            type: 'edit-row',
+            previousColumns: boardColumns,
+            previousRows: currentRows,
+            nextColumns: boardColumns,
+            nextRows,
+          }),
+        )
         return nextRows
       })
     },
@@ -1353,7 +1422,18 @@ function BoardTable({
 
     setBoardRows((currentRows) => {
       const nextRows = [...currentRows, { id: createRowId(), ...rowValues }]
-      pushBoardChange(boardColumns, nextRows)
+      pushBoardChange(
+        boardColumns,
+        nextRows,
+        createUserBoardHistoryEntry({
+          title: 'Added row',
+          type: 'add-row',
+          previousColumns: boardColumns,
+          previousRows: currentRows,
+          nextColumns: boardColumns,
+          nextRows,
+        }),
+      )
       return nextRows
     })
   }, [boardColumns, nextItemNumber, pushBoardChange])
@@ -1401,7 +1481,18 @@ function BoardTable({
 
       setBoardRows((currentRows) => {
         const nextRows = [...currentRows, { id: createRowId(), ...rowValues }]
-        pushBoardChange(boardColumns, nextRows)
+        pushBoardChange(
+          boardColumns,
+          nextRows,
+          createUserBoardHistoryEntry({
+            title: `Added row in ${groupValue}`,
+            type: 'add-row',
+            previousColumns: boardColumns,
+            previousRows: currentRows,
+            nextColumns: boardColumns,
+            nextRows,
+          }),
+        )
         return nextRows
       })
     },
@@ -1434,7 +1525,18 @@ function BoardTable({
     setBoardColumns(nextColumns)
     setBoardRows((currentRows) => {
       const nextRows = currentRows.map((row) => ({ ...row, [uniqueKey]: getDefaultValue(newColumn.type, createdColumn) }))
-      pushBoardChange(nextColumns, nextRows)
+      pushBoardChange(
+        nextColumns,
+        nextRows,
+        createUserBoardHistoryEntry({
+          title: `Added column ${cleanLabel}`,
+          type: 'add-column',
+          previousColumns: boardColumns,
+          previousRows: currentRows,
+          nextColumns,
+          nextRows,
+        }),
+      )
       return nextRows
     })
     setNewColumn({ label: '', type: 'text' })
@@ -1498,6 +1600,7 @@ function BoardTable({
   const changeColumnType = useCallback(
     (columnKey, nextType) => {
       if (!columnTypeOptions.includes(nextType)) return
+      const targetColumn = boardColumns.find((column) => column.key === columnKey)
 
       const nextColumns = boardColumns.map((column) =>
         column.key === columnKey
@@ -1523,7 +1626,18 @@ function BoardTable({
           ...row,
           [columnKey]: normalizeInputValue(nextType, row[columnKey]),
         }))
-        pushBoardChange(nextColumns, nextRows)
+        pushBoardChange(
+          nextColumns,
+          nextRows,
+          createUserBoardHistoryEntry({
+            title: `Changed ${targetColumn?.label || columnKey} type`,
+            type: 'change-column-type',
+            previousColumns: boardColumns,
+            previousRows: currentRows,
+            nextColumns,
+            nextRows,
+          }),
+        )
         return nextRows
       })
       setOpenColumnMenu(null)
@@ -1541,7 +1655,18 @@ function BoardTable({
         column.key === columnKey ? { ...column, label: nextLabel.trim() } : column,
       )
       setBoardColumns(nextColumns)
-      pushBoardChange(nextColumns, boardRows)
+      pushBoardChange(
+        nextColumns,
+        boardRows,
+        createUserBoardHistoryEntry({
+          title: `Renamed column ${targetColumn?.label || columnKey}`,
+          type: 'rename-column',
+          previousColumns: boardColumns,
+          previousRows: boardRows,
+          nextColumns,
+          nextRows: boardRows,
+        }),
+      )
       setOpenColumnMenu(null)
     },
     [boardColumns, boardRows, pushBoardChange],
@@ -1550,6 +1675,7 @@ function BoardTable({
   const deleteColumn = useCallback((columnKey) => {
     if (!canManageColumns) return
 
+    const targetColumn = boardColumns.find((column) => column.key === columnKey)
     const nextColumns = boardColumns.filter((column) => column.key !== columnKey)
     if (columnKey === groupByKey) {
       setGroupByKey('')
@@ -1566,7 +1692,18 @@ function BoardTable({
         delete updatedRow[columnKey]
         return updatedRow
       })
-      pushBoardChange(nextColumns, nextRows)
+      pushBoardChange(
+        nextColumns,
+        nextRows,
+        createUserBoardHistoryEntry({
+          title: `Deleted column ${targetColumn?.label || columnKey}`,
+          type: 'delete-column',
+          previousColumns: boardColumns,
+          previousRows: currentRows,
+          nextColumns,
+          nextRows,
+        }),
+      )
       return nextRows
     })
     setFilters((currentFilters) => currentFilters.filter((filter) => filter.columnKey !== columnKey))
@@ -1607,7 +1744,18 @@ function BoardTable({
           : column,
       )
       setBoardColumns(nextColumns)
-      pushBoardChange(nextColumns, boardRows)
+      pushBoardChange(
+        nextColumns,
+        boardRows,
+        createUserBoardHistoryEntry({
+          title: `Added status ${nextLabel}`,
+          type: 'add-status',
+          previousColumns: boardColumns,
+          previousRows: boardRows,
+          nextColumns,
+          nextRows: boardRows,
+        }),
+      )
       setStatusDraftByColumn((current) => ({ ...current, [columnKey]: '' }))
     },
     [boardColumns, boardRows, pushBoardChange, statusDraftByColumn],
@@ -1644,7 +1792,18 @@ function BoardTable({
       )
       setBoardColumns(nextColumns)
       setBoardRows(nextRows)
-      pushBoardChange(nextColumns, nextRows)
+      pushBoardChange(
+        nextColumns,
+        nextRows,
+        createUserBoardHistoryEntry({
+          title: `Renamed status ${currentLabel}`,
+          type: 'rename-status',
+          previousColumns: boardColumns,
+          previousRows: boardRows,
+          nextColumns,
+          nextRows,
+        }),
+      )
     },
     [boardColumns, boardRows, pushBoardChange],
   )
@@ -1676,7 +1835,19 @@ function BoardTable({
       )
       setBoardColumns(nextColumns)
       setBoardRows(nextRows)
-      pushBoardChange(nextColumns, nextRows)
+      pushBoardChange(
+        nextColumns,
+        nextRows,
+        createUserBoardHistoryEntry({
+          title: `Deleted status ${optionLabel}`,
+          type: 'delete-status',
+          previousColumns: boardColumns,
+          previousRows: boardRows,
+          nextColumns,
+          nextRows,
+          description: `Rows using ${optionLabel} were reassigned to ${fallbackValue || 'an empty value'}.`,
+        }),
+      )
     },
     [boardColumns, boardRows, pushBoardChange],
   )
@@ -1698,7 +1869,18 @@ function BoardTable({
           : column,
       )
       setBoardColumns(nextColumns)
-      pushBoardChange(nextColumns, boardRows)
+      pushBoardChange(
+        nextColumns,
+        boardRows,
+        createUserBoardHistoryEntry({
+          title: `Changed color for ${optionLabel}`,
+          type: 'status-color',
+          previousColumns: boardColumns,
+          previousRows: boardRows,
+          nextColumns,
+          nextRows: boardRows,
+        }),
+      )
     },
     [boardColumns, boardRows, pushBoardChange],
   )
@@ -1768,7 +1950,18 @@ function BoardTable({
           ),
           boardColumns,
         )
-        pushBoardChange(boardColumns, nextRows)
+        pushBoardChange(
+          boardColumns,
+          nextRows,
+          createUserBoardHistoryEntry({
+            title: `Moved row to ${String(laneValue)}`,
+            type: 'kanban-move',
+            previousColumns: boardColumns,
+            previousRows: currentRows,
+            nextColumns: boardColumns,
+            nextRows,
+          }),
+        )
         return nextRows
       })
       setDraggingId(null)
@@ -1980,7 +2173,18 @@ function BoardTable({
       if (rowUpdateDetails?.rowId === rowId) {
         setRowUpdateDetails(null)
       }
-      pushBoardChange(boardColumns, nextRows)
+      pushBoardChange(
+        boardColumns,
+        nextRows,
+        createUserBoardHistoryEntry({
+          title: `Deleted ${rowLabel}`,
+          type: 'delete-row',
+          previousColumns: boardColumns,
+          previousRows: boardRows,
+          nextColumns: boardColumns,
+          nextRows,
+        }),
+      )
     },
     [activeCell?.rowId, boardColumns, boardRows, kanbanEditorRowId, pushBoardChange, rowUpdateDetails?.rowId],
   )
@@ -3356,6 +3560,9 @@ const GroupedTableView = memo(function GroupedTableView({
                     ) : (
                       <div className="px-3 py-2 text-xs text-slate-500">
                         {childGroup.items.length} rows hidden in this subsection.
+                        {getCurrencySummary(boardColumns, childGroup.items)
+                          ? ` · ${getCurrencySummary(boardColumns, childGroup.items)}`
+                          : ''}
                       </div>
                     )}
                   </section>
@@ -3402,6 +3609,9 @@ const GroupedTableView = memo(function GroupedTableView({
           ) : (
             <div className="px-4 py-3 text-sm text-slate-500">
               {group.items.length} rows hidden in this section.
+              {getCurrencySummary(boardColumns, group.items)
+                ? ` · ${getCurrencySummary(boardColumns, group.items)}`
+                : ''}
             </div>
           )}
         </section>
