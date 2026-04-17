@@ -2906,9 +2906,6 @@ const TableView = memo(function TableView({
             style={{
               minWidth: column.minWidth,
               backgroundColor: 'var(--app-bg-soft)',
-              position: 'sticky',
-              top: headerTopOffset,
-              zIndex: stickyZIndex,
             }}
           >
             <div className="flex items-center justify-between gap-2">
@@ -3144,9 +3141,6 @@ const TableView = memo(function TableView({
             style={{
               minWidth: 88,
               backgroundColor: 'var(--app-bg-soft)',
-              position: 'sticky',
-              top: headerTopOffset,
-              zIndex: stickyZIndex,
             }}
           >
             Action
@@ -3174,9 +3168,7 @@ const TableView = memo(function TableView({
       stickyTopOffset={stickyTopOffset}
       stickyZIndex={stickyZIndex}
     >
-      {({ bodyScrollRef, onSyncScroll, scrollerClassName: syncedScrollerClassName, showTopScrollbar }) => {
-        const headerTopOffset = stickyTopOffset + (showTopScrollbar ? TABLE_TOP_SCROLLBAR_HEIGHT : 0)
-
+      {({ bodyScrollRef, onSyncScroll, scrollerClassName: syncedScrollerClassName }) => {
         return (
           <div
             ref={bodyScrollRef}
@@ -3186,7 +3178,7 @@ const TableView = memo(function TableView({
             <table className={`border-collapse ${textSizeClasses.table}`} style={{ width: 'max-content', minWidth: '100%', tableLayout: 'fixed' }}>
               {renderColumnGroup()}
               <thead className="bg-slate-50">
-                <tr>{renderHeaderCells(headerTopOffset)}</tr>
+                <tr>{renderHeaderCells()}</tr>
               </thead>
               <tbody>
                 {filteredRows.map((row) => (
