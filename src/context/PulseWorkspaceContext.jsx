@@ -3,6 +3,7 @@ import { initialWorkspace } from '../data/pulseWorkspace'
 import { supabase } from '../lib/supabaseClient'
 import { accentThemes, defaultSettings } from './pulseWorkspaceConfig'
 import {
+  applyBoardItemRows,
   automationToRecord,
   boardToRecord,
   canAccessBoard,
@@ -284,6 +285,7 @@ export function PulseWorkspaceProvider({ children }) {
       { data: automationRows, error: automationsError },
       { data: notificationRows, error: notificationsError },
       { data: boardPreferenceRows, error: boardPreferencesError },
+      { data: boardItemRows, error: boardItemsError },
     ] = await Promise.all([
       supabase.from('pulse_workspaces').select('*').eq('id', profile.workspace_id).single(),
       supabase.from('pulse_profiles').select('*').eq('workspace_id', profile.workspace_id).order('name'),
@@ -295,6 +297,12 @@ export function PulseWorkspaceProvider({ children }) {
         .eq('user_id', session.user.id)
         .order('created_at', { ascending: false }),
       supabase.from('pulse_board_view_preferences').select('*').eq('user_id', session.user.id),
+      supabase
+        .from('pulse_board_items')
+        .select('*')
+        .eq('workspace_id', profile.workspace_id)
+        .order('board_id')
+        .order('position'),
     ])
 
     if (workspaceError) throw workspaceError
@@ -303,8 +311,10 @@ export function PulseWorkspaceProvider({ children }) {
     if (automationsError) throw automationsError
     if (notificationsError) throw notificationsError
     if (boardPreferencesError) throw boardPreferencesError
+    if (boardItemsError) throw boardItemsError
 
     const usersById = new Map((userRows || []).map((user) => [user.id, user]))
+    const mappedBoardRows = (boardRows || []).map((board) => mapBoardRecord(board, usersById))
     const normalizedSettings = mergeSettings(preferenceRow?.settings)
     const rawBoardPreferences = boardPreferenceRows || []
     const sanitizedBoardPreferences = rawBoardPreferences.map((row) => {
@@ -347,7 +357,7 @@ export function PulseWorkspaceProvider({ children }) {
         workspaceId: user.workspace_id,
       })),
     )
-    setAllBoards((boardRows || []).map((board) => mapBoardRecord(board, usersById)))
+    setAllBoards(applyBoardItemRows(mappedBoardRows, boardItemRows || []))
     setAutomations((automationRows || []).map(mapAutomationRecord))
     setNotifications(
       (notificationRows || [])

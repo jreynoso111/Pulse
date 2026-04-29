@@ -41,9 +41,10 @@ export function ensureUniqueSlug(name, existingBoards, excludedBoardId) {
 }
 
 export function ensureUniqueItemIds(items = []) {
+  const normalizedItems = normalizeBoardItems(items)
   const seenIds = new Set()
 
-  return items.map((item) => {
+  return normalizedItems.map((item) => {
     const nextId = item.id && !seenIds.has(item.id) ? item.id : createStableId('item')
     seenIds.add(nextId)
     return {
@@ -51,6 +52,42 @@ export function ensureUniqueItemIds(items = []) {
       id: nextId,
     }
   })
+}
+
+export function normalizeBoardItems(items = []) {
+  if (Array.isArray(items)) {
+    return items.filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+  }
+
+  if (!items || typeof items !== 'object') return []
+
+  const objectValues = Object.values(items)
+  if (
+    objectValues.length > 0 &&
+    objectValues.every((item) => item && typeof item === 'object' && !Array.isArray(item))
+  ) {
+    return objectValues
+  }
+
+  return [items]
+}
+
+export function normalizeBoardColumns(columns = []) {
+  if (Array.isArray(columns)) {
+    return columns.filter((column) => column && typeof column === 'object' && !Array.isArray(column))
+  }
+
+  if (!columns || typeof columns !== 'object') return []
+
+  const objectValues = Object.values(columns)
+  if (
+    objectValues.length > 0 &&
+    objectValues.every((column) => column && typeof column === 'object' && !Array.isArray(column))
+  ) {
+    return objectValues
+  }
+
+  return []
 }
 
 function parseDateValue(value) {
@@ -216,9 +253,53 @@ export function mapBoardRecord(record, workspaceUsersById) {
       deletedAt: entry.deletedAt,
     })),
     deleteAfter: record.delete_after,
-    columns: record.columns || [],
+    columns: normalizeBoardColumns(record.columns),
     items: ensureUniqueItemIds(record.items || []),
   }
+}
+
+export function applyBoardItemRows(boardRecords, itemRows = []) {
+  if (!Array.isArray(itemRows) || itemRows.length === 0) return boardRecords
+
+  const activeItemsByBoardId = itemRows.reduce((accumulator, row) => {
+    if (!row?.board_id || row.is_deleted === true) return accumulator
+
+    const rowData = row.row_data && typeof row.row_data === 'object' && !Array.isArray(row.row_data)
+      ? row.row_data
+      : {}
+    const item = {
+      ...rowData,
+      id: row.item_id || rowData.id,
+    }
+
+    if (!accumulator.has(row.board_id)) {
+      accumulator.set(row.board_id, [])
+    }
+
+    accumulator.get(row.board_id).push({
+      item,
+      position: row.position ?? 0,
+      updatedAt: row.updated_at || '',
+    })
+    return accumulator
+  }, new Map())
+
+  return boardRecords.map((board) => {
+    const itemEntries = activeItemsByBoardId.get(board.id)
+    if (!itemEntries?.length) return board
+
+    return {
+      ...board,
+      items: ensureUniqueItemIds(
+        itemEntries
+          .sort((left, right) => {
+            if (left.position !== right.position) return left.position - right.position
+            return String(left.updatedAt).localeCompare(String(right.updatedAt))
+          })
+          .map((entry) => entry.item),
+      ),
+    }
+  })
 }
 
 export function mapAutomationRecord(record) {
@@ -279,7 +360,7 @@ export function boardToRecord(board, workspaceId) {
     kanban_group_by: board.kanbanGroupBy || 'status',
     kanban_card_fields: board.kanbanCardFields || [],
     owner_user_id: board.ownerUserId,
-    columns: board.columns || [],
+    columns: normalizeBoardColumns(board.columns),
     items: ensureUniqueItemIds(board.items || []),
     shared_with: (board.sharedWith || []).map((entry) => ({
       userId: entry.userId,
