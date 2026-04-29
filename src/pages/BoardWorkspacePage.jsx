@@ -559,6 +559,8 @@ function BoardWorkspacePage() {
         initialConditionalFormattingRules={boardViewPreferences?.conditionalFormattingRules || []}
         initialTextSize={boardViewPreferences?.textSize || 'medium'}
         clearFiltersToken={clearTableFiltersToken}
+        hasExternalFilters={Boolean(localTableSearchQuery.trim())}
+        onClearExternalFilters={() => setLocalTableSearchQuery('')}
         onDataChange={handleBoardChange}
         onViewConfigChange={(updates) => {
           updateBoardViewPreferences(board.id, updates).catch((error) => {

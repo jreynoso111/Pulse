@@ -737,6 +737,8 @@ function BoardTable({
   initialConditionalFormattingRules = [],
   initialTextSize = 'medium',
   clearFiltersToken = 0,
+  hasExternalFilters = false,
+  onClearExternalFilters,
   onDataChange,
   onViewConfigChange,
 }) {
@@ -781,6 +783,13 @@ function BoardTable({
   const [kanbanCardFields, setKanbanCardFields] = useState(initialKanbanCardFields)
   const [kanbanCollapsedLaneIdsByField, setKanbanCollapsedLaneIdsByField] = useState(initialKanbanCollapsedLaneIdsByField)
   const [kanbanCollapsedCardIds, setKanbanCollapsedCardIds] = useState(() => rows.map((row) => row.id))
+  const clearAllTableFilters = useCallback(() => {
+    setFilters([])
+    setColumnFilterSearch({})
+    setOpenColumnMenu(null)
+    setColumnMenuStyle(null)
+    onClearExternalFilters?.()
+  }, [onClearExternalFilters])
 
   useEffect(() => {
     setBoardColumns(columns)
@@ -852,11 +861,8 @@ function BoardTable({
 
   useEffect(() => {
     if (!clearFiltersToken) return
-    setFilters([])
-    setColumnFilterSearch({})
-    setOpenColumnMenu(null)
-    setColumnMenuStyle(null)
-  }, [clearFiltersToken])
+    clearAllTableFilters()
+  }, [clearAllTableFilters, clearFiltersToken])
 
   useEffect(() => {
     setKanbanGroupKey(initialKanbanGroupKey || columns.find((column) => column.key === 'status')?.key || '')
@@ -2284,16 +2290,16 @@ function BoardTable({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {filters.length > 0 && (
+          {(filters.length > 0 || hasExternalFilters) && (
             <button
               type="button"
               className="inline-flex h-9 items-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 text-sm font-medium text-rose-700 transition hover:bg-rose-100"
-              onClick={() => setFilters([])}
+              onClick={clearAllTableFilters}
             >
               <FilterX size={14} />
               Clear filters
               <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-semibold text-rose-700">
-                {filters.length}
+                {filters.length + (hasExternalFilters ? 1 : 0)}
               </span>
             </button>
           )}
@@ -2588,7 +2594,7 @@ function BoardTable({
 
       <div className="transition-all duration-300">
         {filteredRows.length === 0 ? (
-          <EmptyState onClearFilters={() => setFilters([])} />
+          <EmptyState onClearFilters={clearAllTableFilters} />
         ) : viewMode === 'table' && groupByKey ? (
           <GroupedTableView
             menuScopePrefix="group"
