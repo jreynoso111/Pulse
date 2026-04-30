@@ -280,7 +280,7 @@ returns table (
   item_id text,
   row_name text,
   row_data jsonb,
-  position integer,
+  "position" integer,
   is_deleted boolean,
   deleted_at timestamptz,
   created_at timestamptz,
