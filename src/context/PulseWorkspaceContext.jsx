@@ -27,6 +27,7 @@ import {
 const PulseWorkspaceContext = createContext(null)
 const AUTOMATION_NOTIFICATION_TYPE = 'automation'
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+const BOARD_IMPORT_CHUNK_SIZE = 75
 
 function parseAutomationDate(value) {
   if (value == null || value === '') return null
@@ -1047,6 +1048,40 @@ export function PulseWorkspaceProvider({ children }) {
         }
 
         return updateBoardRecord(boardToSave)
+      },
+      async importBoardRows(boardId, rows, mergeKey) {
+        const board = allBoards.find((entry) => entry.id === boardId)
+        if (!board) return { inserted: 0, updated: 0, skipped: rows?.length || 0, total: 0 }
+
+        const boardPermission = getBoardPermission(board, currentUserId)
+        if (boardPermission !== 'owner' && boardPermission !== 'edit') {
+          throw new Error('You do not have permission to import rows into this board.')
+        }
+
+        const validRows = Array.isArray(rows) ? rows.filter((row) => row && typeof row === 'object') : []
+        if (validRows.length === 0) return { inserted: 0, updated: 0, skipped: rows?.length || 0, total: board.items.length }
+
+        const totals = { inserted: 0, updated: 0, skipped: 0, total: board.items.length }
+
+        for (let index = 0; index < validRows.length; index += BOARD_IMPORT_CHUNK_SIZE) {
+          const chunk = validRows.slice(index, index + BOARD_IMPORT_CHUNK_SIZE)
+          const { data, error } = await supabase.rpc('pulse_import_board_rows', {
+            target_board_id: boardId,
+            imported_rows: chunk,
+            merge_key: mergeKey || null,
+          })
+
+          if (error) throw error
+
+          const [result] = data || []
+          totals.inserted += result?.inserted_count || 0
+          totals.updated += result?.updated_count || 0
+          totals.skipped += result?.skipped_count || 0
+          totals.total = result?.total_active_count || totals.total
+        }
+
+        await loadWorkspaceData()
+        return totals
       },
       async deleteBoard(boardId) {
         const board = allBoards.find((entry) => entry.id === boardId)

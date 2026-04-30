@@ -166,6 +166,7 @@ function BoardWorkspacePage() {
     currentUser,
     getBoardPermission,
     getBoardViewPreferences,
+    importBoardRows,
     removeBoardShare,
     settings,
     shareBoard,
@@ -365,6 +366,7 @@ function BoardWorkspacePage() {
     let updated = 0
     let skipped = 0
     let nextColumns = [...board.columns]
+    const rowsToImport = []
 
     uploadRows.forEach((sourceRow) => {
       const sourceKey = normalizeKeyValue(sourceRow[uploadKeyMatch.header])
@@ -396,6 +398,7 @@ function BoardWorkspacePage() {
         }, { id: createImportedRowId() })
         existingRows.push(newRow)
         rowIndexByKey.set(sourceKey, existingRows.length - 1)
+        rowsToImport.push(newRow)
         inserted += 1
         return
       }
@@ -404,15 +407,22 @@ function BoardWorkspacePage() {
         ...existingRows[existingIndex],
         ...payload,
       }
+      rowsToImport.push(existingRows[existingIndex])
       updated += 1
     })
 
     try {
-      await updateBoard(board.id, {
-        ...board,
-        columns: sanitizeSharedColumns(board.columns, nextColumns),
-        items: existingRows,
-      })
+      const sanitizedColumns = sanitizeSharedColumns(board.columns, nextColumns)
+      const hasColumnUpdates = JSON.stringify(sanitizedColumns) !== JSON.stringify(board.columns)
+
+      if (hasColumnUpdates) {
+        await updateBoard(board.id, { columns: sanitizedColumns })
+      }
+
+      if (rowsToImport.length > 0) {
+        await importBoardRows(board.id, rowsToImport, uploadBoardKey)
+      }
+
       setUploadFeedback({ inserted, updated, skipped, matched: matchedEntries.length })
       setUploadError('')
     } catch (error) {
