@@ -40,6 +40,7 @@ function AppLayout() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showSearchResults, setShowSearchResults] = useState(false)
   const searchRef = useRef(null)
+  const notificationsRef = useRef(null)
   const navigate = useNavigate()
   const {
     acceptBoardShare,
@@ -146,6 +147,10 @@ function AppLayout() {
       if (searchRef.current && !searchRef.current.contains(event.target)) {
         setShowSearchResults(false)
       }
+
+      if (notificationsRef.current && !notificationsRef.current.contains(event.target)) {
+        setShowNotifications(false)
+      }
     }
 
     document.addEventListener('mousedown', handlePointerDown)
@@ -164,7 +169,6 @@ function AppLayout() {
     try {
       await acceptBoardShare(group.latest.id)
       setShowNotifications(false)
-      navigate('/app/boards')
     } catch (error) {
       console.error('Failed to accept board share.', error)
       setNotificationActionError('Unable to accept this board share. Refresh and try again.')
@@ -317,7 +321,7 @@ function AppLayout() {
                   <p className="truncate text-xs text-slate-500">{currentUser?.email || ''}</p>
                 </div>
               </div>
-              <div className="relative">
+              <div ref={notificationsRef} className="relative">
               <button
                 type="button"
                 onClick={() => {
