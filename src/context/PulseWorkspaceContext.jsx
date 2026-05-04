@@ -28,6 +28,19 @@ const PulseWorkspaceContext = createContext(null)
 const AUTOMATION_NOTIFICATION_TYPE = 'automation'
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/
 const BOARD_IMPORT_CHUNK_SIZE = 25
+const PASSWORD_CHANGE_SESSION_KEY = 'pulse_password_change_session'
+
+function markPasswordChangeSession() {
+  window.sessionStorage?.setItem(PASSWORD_CHANGE_SESSION_KEY, 'active')
+}
+
+function clearPasswordChangeSession() {
+  window.sessionStorage?.removeItem(PASSWORD_CHANGE_SESSION_KEY)
+}
+
+function hasPasswordChangeSession() {
+  return window.sessionStorage?.getItem(PASSWORD_CHANGE_SESSION_KEY) === 'active'
+}
 
 function parseAutomationDate(value) {
   if (value == null || value === '') return null
@@ -235,8 +248,14 @@ export function PulseWorkspaceProvider({ children }) {
 
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (!active) return
+      if (event === 'PASSWORD_RECOVERY') {
+        markPasswordChangeSession()
+      }
+      if (event === 'SIGNED_OUT') {
+        clearPasswordChangeSession()
+      }
       setSession(nextSession)
       setAuthReady(true)
     })
@@ -278,6 +297,11 @@ export function PulseWorkspaceProvider({ children }) {
     if (profile.disabled === true) {
       await supabase.auth.signOut()
       throw new Error('This profile has been disabled by an administrator.')
+    }
+
+    if (profile.must_change_password === true && !hasPasswordChangeSession()) {
+      await supabase.auth.signOut()
+      return
     }
 
     const [
@@ -875,14 +899,28 @@ export function PulseWorkspaceProvider({ children }) {
       dashboardData,
       async login({ email, password }) {
         const normalizedEmail = email.trim().toLowerCase()
-        const { error } = await supabase.auth.signInWithPassword({
+        clearPasswordChangeSession()
+        const { data, error } = await supabase.auth.signInWithPassword({
           email: normalizedEmail,
           password,
         })
 
         if (error) throw new Error(error.message)
+
+        if (data?.user?.id) {
+          const { data: profile } = await supabase
+            .from('pulse_profiles')
+            .select('must_change_password')
+            .eq('id', data.user.id)
+            .maybeSingle()
+
+          if (profile?.must_change_password === true) {
+            markPasswordChangeSession()
+          }
+        }
       },
       async logout() {
+        clearPasswordChangeSession()
         const { error } = await supabase.auth.signOut()
         if (error) throw new Error(error.message)
       },
@@ -918,6 +956,7 @@ export function PulseWorkspaceProvider({ children }) {
           .eq('id', currentUserId)
 
         if (profileError) throw new Error(profileError.message)
+        clearPasswordChangeSession()
 
         setCurrentUserProfile((current) =>
           current
